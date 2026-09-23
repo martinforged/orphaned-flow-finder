@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "appId": null,
+  "appDisplayName": "Orphaned Flow Finder",
+  "region": "gccmoderate",
+  "appType": "CodeApp",
+  "environmentId": "<TARGET-ENVIRONMENT-ID>",
+  "description": "Tenant-wide inventory of Power Automate cloud flows for orphaned-owner review and co-owner recovery.",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {},
+  "databaseReferences": {}
+}
