@@ -18,6 +18,22 @@ This document is intended for:
 - Power Platform solution/ALM owners
 - Developers responsible for the Code App source
 
+## Quick installation path
+
+Use this path when installing the published package from the project
+repository. Sections 3 and 4 are for maintainers who build a new release and
+can be skipped by a target-tenant installer.
+
+1. Download
+   `solutions/OrphanedFlowFinder_1_0_0_0_managed.zip`.
+2. Confirm the file hash against `solutions/SHA256SUMS.txt`.
+3. Complete the target prerequisites in section 5.
+4. Create the four target connections in section 6.
+5. Import the managed ZIP and map the four connection references as described
+   in section 7.
+6. Complete first-run consent and the acceptance test in sections 8 and 9.
+7. Share Run access only with approved administrators.
+
 ## 1. What the solution contains
 
 The solution display name is **Oprhaned Flow Finder**. The Code App display
@@ -63,6 +79,9 @@ Do not use this GCC endpoint in another cloud.
 
 Complete this section once in the source/development environment before
 distributing the solution.
+
+This section is for project maintainers. It has already been completed for the
+published solution packages in `solutions/`.
 
 ### Why this step is mandatory
 
@@ -225,6 +244,12 @@ Distribute:
 - Release notes/version
 - Optional source package for approved developers
 
+The repository's official release artifacts are:
+
+- `solutions/OrphanedFlowFinder_1_0_0_0_managed.zip`
+- `solutions/OrphanedFlowFinder_1_0_0_0_unmanaged.zip`
+- `solutions/SHA256SUMS.txt`
+
 ## 5. Target tenant prerequisites
 
 The target environment must have:
@@ -299,7 +324,9 @@ the exact GCC endpoint, and administrator permissions.
 2. Select the target environment.
 3. Open **Solutions**.
 4. Select **Import solution**.
-5. Upload the exported ZIP.
+5. Upload `OrphanedFlowFinder_1_0_0_0_managed.zip` for the standard
+   installation, or the unmanaged ZIP only when the target team will own
+   future development.
 6. Review the package details and dependencies.
 7. Map each connection reference to the matching target connection.
 8. Complete the import.

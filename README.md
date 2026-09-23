@@ -7,6 +7,20 @@ or use an organization-approved replacement solution name.
 For tenant-to-tenant packaging, import, connection mapping, first-run, and
 operations guidance, see [DEPLOYMENT-GUIDE.md](./DEPLOYMENT-GUIDE.md).
 
+## Downloadable solution packages
+
+Ready-to-import Power Platform solution packages are available in
+[solutions/](./solutions/):
+
+- [Managed solution](./solutions/OrphanedFlowFinder_1_0_0_0_managed.zip) -
+  recommended for production, UAT, and most tenant installations.
+- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_0_0_0_unmanaged.zip) -
+  intended only for organizations taking ownership of future development.
+
+The packages contain the Code App and four solution connection references.
+Target-tenant connections must be created and mapped during or after import.
+See the deployment guide before installing.
+
 ## Current milestone
 
 Phase 2 adds Microsoft Entra ID validation and guarded orphan-flow recovery:
