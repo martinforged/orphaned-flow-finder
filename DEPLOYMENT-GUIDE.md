@@ -25,7 +25,7 @@ repository. Sections 3 and 4 are for maintainers who build a new release and
 can be skipped by a target-tenant installer.
 
 1. Download
-   `solutions/OrphanedFlowFinder_1_0_0_0_managed.zip`.
+   `solutions/OrphanedFlowFinder_1_1_0_0_managed.zip`.
 2. Confirm the file hash against `solutions/SHA256SUMS.txt`.
 3. Complete the target prerequisites in section 5.
 4. Create the four target connections in section 6.
@@ -41,16 +41,26 @@ name is **Orphaned Flow Finder**.
 
 The app:
 
-1. Reads the tenant's Power Platform environments.
-2. Queries Power Platform Inventory for tenant-wide cloud flow inventory.
-3. Validates unique owner object IDs against Microsoft Entra ID.
-4. Classifies owner records as Active, Disabled, Deleted, Missing, or Unknown.
-5. Filters, sorts, pages, and exports the inventory.
-6. Allows a confirmed deleted-owner flow to receive a valid recovery co-owner.
+1. Merges environments from Power Platform for Admins and Power Platform
+   Inventory so Dataverse-backed and non-Dataverse environments are covered.
+2. Loads active environments before scanning so the operator can scan all
+   environments, only the Default environment, or one selected environment.
+3. Applies a selected environment to the Power Platform Inventory query.
+4. Validates unique owner object IDs against Microsoft Entra ID.
+5. Classifies owner records as Active, Disabled, Deleted, Missing, or Unknown.
+6. Identifies Dataverse database status and solution-aware flows when the
+   platform returns that metadata.
+7. Filters, sorts, pages, and exports the inventory.
+8. Adds an active Microsoft Entra user as a co-owner to explicitly selected
+   flows after preview and confirmation.
+9. Opens a single selected non-solution flow in the GCC Power Automate maker
+   portal so an existing owner or co-owner can use the supported **Send a
+   copy** panel.
 
 Tenant scanning and directory validation are read-only. The only write operation
-adds a recovery co-owner after the operator reviews the affected flows and
-selects an explicit confirmation check box.
+adds a co-owner after the operator reviews the affected flows and
+selects an explicit confirmation check box. The Send a copy handoff performs
+no write in this app.
 
 ## 2. Connector architecture
 
@@ -58,10 +68,10 @@ The app requires four connectors.
 
 | Connector | Connector ID | Purpose | Connection behavior |
 | --- | --- | --- | --- |
-| Power Platform for Admins | `shared_powerplatformforadmins` | Lists environments, including Default | Per-user/nonshareable |
-| HTTP with Microsoft Entra ID (preauthorized) | `shared_webcontents` | Calls the GCC Power Platform Inventory API | Shareable connection |
-| Office 365 Users | `shared_office365users` | Validates owner IDs and searches recovery users | Per-user/nonshareable |
-| Power Automate Management | `shared_flowmanagement` | Adds a confirmed recovery co-owner | Per-user/nonshareable |
+| Power Platform for Admins | `shared_powerplatformforadmins` | Lists environments and expands Dataverse metadata | Per-user/nonshareable |
+| HTTP with Microsoft Entra ID (preauthorized) | `shared_webcontents` | Queries GCC environment and cloud flow inventory | Shareable connection |
+| Office 365 Users | `shared_office365users` | Validates owner IDs and searches active co-owners | Per-user/nonshareable |
+| Power Automate Management | `shared_flowmanagement` | Adds a confirmed flow co-owner as admin | Per-user/nonshareable |
 
 ### GCC Power Platform API connection
 
@@ -246,8 +256,8 @@ Distribute:
 
 The repository's official release artifacts are:
 
-- `solutions/OrphanedFlowFinder_1_0_0_0_managed.zip`
-- `solutions/OrphanedFlowFinder_1_0_0_0_unmanaged.zip`
+- `solutions/OrphanedFlowFinder_1_1_0_0_managed.zip`
+- `solutions/OrphanedFlowFinder_1_1_0_0_unmanaged.zip`
 - `solutions/SHA256SUMS.txt`
 
 ## 5. Target tenant prerequisites
@@ -324,7 +334,7 @@ the exact GCC endpoint, and administrator permissions.
 2. Select the target environment.
 3. Open **Solutions**.
 4. Select **Import solution**.
-5. Upload `OrphanedFlowFinder_1_0_0_0_managed.zip` for the standard
+5. Upload `OrphanedFlowFinder_1_1_0_0_managed.zip` for the standard
    installation, or the unmanaged ZIP only when the target team will own
    future development.
 6. Review the package details and dependencies.
@@ -349,8 +359,13 @@ Never point a target reference to a source-tenant connection ID.
 2. When Power Apps displays **Allow this app to access your data**, verify all
    four connectors.
 3. Select **Allow**.
-4. Select **Scan tenant**.
-5. Keep the player open until inventory and directory validation complete.
+4. Wait for the pre-scan environment list to load.
+5. Choose one scan scope:
+   - Leave **All environments** selected.
+   - Check **Scan only the Default environment**.
+   - Select one Power Platform environment from the list.
+6. Select the applicable scan button.
+7. Keep the player open until inventory and directory validation complete.
 
 Power Platform Inventory can take up to 15 minutes to reflect recently created,
 modified, or deleted resources.
@@ -361,8 +376,19 @@ Complete this checklist before production use.
 
 ### Inventory
 
+- The pre-scan selector lists the active environments available to the
+  administrator.
+- **Scan only the Default environment** overrides and disables the environment
+  selector.
+- An all-environments scan returns flows across the tenant.
+- A selected-environment scan returns flows and owner validation only for that
+  environment.
 - The environment count is nonzero.
 - The Default environment appears in the Environment filter.
+- Known Dataverse environments show the **Dataverse** badge and non-Dataverse
+  environments show **No Dataverse**.
+- Flow-level metadata never changes the environment database badge.
+- An environment returned by only one discovery source still appears.
 - Cloud flows are returned.
 - Owner IDs are deduplicated and validated.
 - Active, Disabled, Deleted, Missing, and Unknown statuses behave as expected.
@@ -370,30 +396,55 @@ Complete this checklist before production use.
 ### Filters and export
 
 - Summary metric cards filter or organize the inventory.
-- Environment, owner status, owner, environment type, region, modified date,
-  and Default-only filters work.
+- Environment, owner status, owner, environment type, region, Dataverse,
+  modified date, and Default-only filters work.
 - Active filter chips can be removed.
 - **Clear all** resets the inventory.
 - CSV export contains only the filtered rows.
 
-### Recovery safety
+### Co-owner assignment safety
 
-- Only flows with a directory-confirmed deleted owner can be selected.
+- Flows with active, disabled, deleted, missing, or unknown primary-owner
+  status can be selected when the flow and environment IDs are available.
 - No more than five flows can be selected in one batch.
-- Recovery-user search returns active target-tenant users.
-- The preview lists every selected flow and recovery co-owner.
-- **Confirm and add co-owner** remains disabled until the confirmation box is
-  selected.
+- Co-owner search returns active target-tenant users.
+- The preview lists every selected flow and proposed co-owner.
+- **Confirm and grant co-owner access** remains disabled until the confirmation
+  box is selected.
 
-Use a dedicated test flow for the first recovery test.
+Use a dedicated test flow for the first co-owner assignment test.
 
 Important behavior:
 
-- Recovery adds the selected user as a co-owner with edit access.
-- The immutable deleted primary-owner permission can remain listed.
-- Connections owned by the deleted user might still need repair.
+- Assignment adds the selected user as a co-owner with edit access.
+- Existing owners remain; the immutable deleted primary-owner permission can
+  remain listed.
+- Existing connections aren't transferred and might still need repair.
 - Solution-aware flows can have primary ownership changed separately through
   the flow details experience.
+
+### Send a copy guidance
+
+- Selecting exactly one non-solution flow enables **Send a copy**.
+- Selecting zero or multiple flows disables **Send a copy**.
+- Selecting a solution-aware flow disables **Send a copy**; use **Save As** or
+  solution export/import for that flow.
+- The confirmation dialog identifies the selected flow and explains that the
+  recipient receives an independent copy without the original connections.
+- The operator reviews the flow for personal information, secrets, and
+  hard-coded environment values before sending it.
+- **Open flow in Power Automate** opens the GCC maker URL for the correct
+  environment and flow ID.
+- An existing owner or co-owner can select **Send a copy** on the flow details
+  command bar, choose recipients, and send the template.
+- If the command isn't present, inventory or environment-admin access alone
+  wasn't sufficient; use an existing owner/co-owner or explicitly grant the
+  operator co-owner access first.
+
+Power Automate doesn't expose its portal Send a copy operation through the
+supported Power Automate Management connector. The app deliberately uses the
+documented portal workflow instead of an undocumented API or an
+administrator-owned clone.
 
 ## 10. Share the app
 
@@ -421,7 +472,7 @@ Administrator permissions. The operator must already hold the required role.
 - Review DLP policy before enabling the HTTP connector.
 - Use a dedicated admin or service account for shared connections where policy
   permits.
-- Review recovery results after each batch.
+- Review co-owner assignment results after each batch.
 - Repair or replace departed-user connections separately.
 - Do not interpret an Unknown directory result as proof that a user was
   deleted.
@@ -439,8 +490,14 @@ Administrator permissions. The operator must already hold the required role.
 | `AADSTS7000301` from Power Platform for Admins V2 | Cross-cloud certificate issue in the V2 connector path | This app must use the preauthorized HTTP connector; don't bind it to Power Platform for Admins V2 |
 | Directory owners show Unknown | Office 365 Users lookup failed or was throttled | Repair the Office 365 Users connection and scan again |
 | Inventory is empty or stale | Role doesn't include tenant inventory access, wrong API endpoint, or inventory propagation delay | Verify role/endpoint and wait at least 15 minutes |
+| Dataverse environment is missing | One environment-discovery source failed or inventory hasn't propagated | Review **Scan notes and exceptions**, verify both admin connections, wait 15 minutes, and scan again; flow-referenced environments are added with an ID-based fallback |
+| A non-Dataverse environment shows Dataverse | An older build inferred environment state from flow-level `workflowEntityId` | Upgrade to the current build and scan again; only expanded linked-environment metadata now determines the badge |
+| Database status shows Unknown | Expanded admin environment metadata wasn't available | Repair the Power Platform for Admins connection and scan again |
+| Send a copy is disabled | Zero or multiple flows are selected, or the selected flow is solution-aware | Select exactly one non-solution flow; use Save As or solution export/import for a solution-aware flow |
+| Flow opens but Send a copy isn't shown | The signed-in operator isn't an owner or co-owner of the flow | Have an existing owner/co-owner send the copy, or grant the operator co-owner access first |
+| Recipient can't use the copied flow | The independent copy needs recipient-owned connections or contains environment-specific values | Have the recipient create/select their connections and review hard-coded IDs, URLs, email addresses, and other environment-specific configuration |
 | `RemovalOfPermissionNotAllowed` | An older app build attempted to remove the immutable primary owner | Upgrade the solution; the current build adds a co-owner only |
-| Recovery succeeds but deleted owner remains listed | Expected platform behavior for the immutable primary owner | Verify the recovery co-owner was added; change solution-aware primary ownership separately if required |
+| Co-owner assignment succeeds but deleted owner remains listed | Expected platform behavior for the immutable primary owner | Verify the co-owner was added; change solution-aware primary ownership separately if required |
 | App reports an old version | Power Apps player/CDN propagation | Close and reopen the app, or select the player Refresh banner |
 | Nonadmin users can launch but can't scan | Sharing grants app access, not admin roles | Remove broad sharing and use an approved admin group |
 
@@ -469,7 +526,7 @@ records are environment resources and can be used by other apps or flows.
 - Export a target backup before a major update when required.
 - Uninstalling the solution removes solution components but doesn't undo
   co-owner permissions already added to flows.
-- To reverse a recovery co-owner, use the supported Power Automate sharing or
+- To remove an assigned co-owner, use the supported Power Automate sharing or
   admin-permissions experience and verify the flow retains at least one valid
   owner.
 
@@ -497,7 +554,8 @@ records are environment resources and can be used by other apps or flows.
 - [ ] App first-run consent is completed
 - [ ] Inventory scan succeeds
 - [ ] Filters and CSV export are validated
-- [ ] Recovery preview is validated with a test flow
+- [ ] Co-owner assignment preview is validated with a test flow
+- [ ] Send a copy opens the selected test flow in the GCC maker portal
 - [ ] Run access is limited to approved administrators
 
 ## Related project documentation
@@ -511,5 +569,10 @@ For feature and development details, see [README.md](./README.md).
 - [Solutions overview](https://learn.microsoft.com/power-apps/maker/data-platform/solutions-overview)
 - [Import solutions](https://learn.microsoft.com/power-apps/maker/data-platform/import-update-export-solutions)
 - [Power Platform Inventory](https://learn.microsoft.com/power-platform/admin/power-platform-inventory)
+- [Power Platform inventory schema](https://learn.microsoft.com/power-platform/admin/inventory-schema)
+- [Power Platform inventory API](https://learn.microsoft.com/power-platform/admin/inventory-api)
+- [Share a cloud flow](https://learn.microsoft.com/power-automate/create-team-flows)
+- [Duplicate a solution-aware cloud flow using Save As](https://learn.microsoft.com/power-automate/edit-solution-aware-flow#duplicate-a-solution-aware-cloud-flow-using-save-as)
+- [Power Automate US Government service URLs](https://learn.microsoft.com/power-automate/us-govt#power-automate-us-government-service-urls)
 - [Manage orphaned flows when the owner leaves](https://learn.microsoft.com/troubleshoot/power-platform/power-automate/flow-management/manage-orphan-flow-when-owner-leaves-org)
 - [Power Apps US Government service URLs](https://learn.microsoft.com/power-platform/admin/powerapps-us-government#power-apps-us-government-service-urls)

@@ -15,11 +15,17 @@ const FLOW_PAGE_SIZE = 1_000;
 const MAX_FLOW_PAGES = 1_000;
 const POWER_PLATFORM_API_VERSION = "2026-06-01";
 const INVENTORY_API_VERSION = "2024-10-01";
+const ENVIRONMENT_RESOURCE_TYPE = "microsoft.powerplatform/environments";
 const CLOUD_FLOW_RESOURCE_TYPE = "microsoft.powerautomate/cloudflows";
 const INVENTORY_DATA_SOURCE = "webcontents";
 const INVENTORY_ENDPOINT = `/resourcequery/resources/query?api-version=${INVENTORY_API_VERSION}`;
+const DATAVERSE_METADATA_EXPAND = "properties/linkedEnvironmentMetadata";
+const ENVIRONMENT_ID_PATTERN =
+  /^(?:Default-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const httpClient = getClient(dataSourcesInfo);
+
+export type DataverseStatus = "enabled" | "not-provisioned" | "unknown";
 
 export interface TenantEnvironment {
   id: string;
@@ -28,6 +34,7 @@ export interface TenantEnvironment {
   location: string;
   isDefault: boolean;
   provisioningState: string;
+  dataverseStatus: DataverseStatus;
 }
 
 export interface TenantFlow {
@@ -38,9 +45,12 @@ export interface TenantFlow {
   environmentType: string;
   isDefaultEnvironment: boolean;
   location: string;
+  dataverseStatus: DataverseStatus;
+  workflowEntityId?: string;
+  isSolutionAware: boolean;
   ownerId?: string;
   owner: OwnerValidation;
-  recoveryOwner?: DirectoryUser;
+  assignedCoOwner?: DirectoryUser;
   createdBy?: string;
   createdTime?: string;
   lastModifiedTime?: string;
@@ -72,14 +82,18 @@ export interface TenantFlowScanResult {
   scannedAt: string;
 }
 
-type ProgressHandler = (progress: ScanProgress) => void;
-
-interface EnvironmentInventoryResult {
+export interface TenantEnvironmentDiscoveryResult {
   environments: TenantEnvironment[];
   issues: ScanIssue[];
 }
 
-interface FlowInventoryResult {
+export interface TenantFlowScanScope {
+  environmentId?: string;
+}
+
+type ProgressHandler = (progress: ScanProgress) => void;
+
+interface PowerPlatformInventoryResult {
   resources: InventoryResource[];
   reportedTotal: number;
   isPossiblyIncomplete: boolean;
@@ -200,7 +214,21 @@ function extractSkipToken(nextLink: string): string | undefined {
   }
 }
 
-function normalizeEnvironment(
+function getAdminDataverseStatus(
+  properties: Environment["properties"],
+): DataverseStatus {
+  const metadata = properties?.linkedEnvironmentMetadata;
+  const hasDataverseMetadata = Boolean(
+    metadata?.resourceId?.trim() ||
+      metadata?.uniqueName?.trim() ||
+      metadata?.instanceUrl?.trim() ||
+      metadata?.instanceApiUrl?.trim(),
+  );
+
+  return hasDataverseMetadata ? "enabled" : "not-provisioned";
+}
+
+function normalizeAdminEnvironment(
   environment: Environment,
 ): TenantEnvironment | undefined {
   const id =
@@ -222,10 +250,11 @@ function normalizeEnvironment(
     location: environment.location?.trim() || "Unknown",
     isDefault: properties?.isDefault === true,
     provisioningState: properties?.provisioningState?.trim() || "Unknown",
+    dataverseStatus: getAdminDataverseStatus(properties),
   };
 }
 
-async function listTenantEnvironments(): Promise<EnvironmentInventoryResult> {
+async function listAdminEnvironments(): Promise<TenantEnvironmentDiscoveryResult> {
   const environments: TenantEnvironment[] = [];
   const issues: ScanIssue[] = [];
   const seenSkipTokens = new Set<string>();
@@ -236,6 +265,7 @@ async function listTenantEnvironments(): Promise<EnvironmentInventoryResult> {
       POWER_PLATFORM_API_VERSION,
       skipToken,
       ENVIRONMENT_PAGE_SIZE,
+      DATAVERSE_METADATA_EXPAND,
     );
 
     if (!result.success) {
@@ -246,7 +276,7 @@ async function listTenantEnvironments(): Promise<EnvironmentInventoryResult> {
     }
 
     for (const environment of result.data?.value ?? []) {
-      const normalized = normalizeEnvironment(environment);
+      const normalized = normalizeAdminEnvironment(environment);
       if (!normalized) {
         issues.push({
           severity: "warning",
@@ -308,23 +338,57 @@ async function listTenantEnvironments(): Promise<EnvironmentInventoryResult> {
 
 async function listTenantFlowResources(
   onProgress: ProgressHandler,
-): Promise<FlowInventoryResult> {
+  environmentId?: string,
+): Promise<PowerPlatformInventoryResult> {
+  return queryInventoryResources(
+    CLOUD_FLOW_RESOURCE_TYPE,
+    MAX_FLOW_PAGES,
+    "Querying tenant cloud flow inventory",
+    (loaded, total, page) => {
+      onProgress({
+        phase: "loading-flows",
+        processedItems: loaded,
+        totalItems: total,
+        message: `Loading tenant cloud flow inventory page ${page}.`,
+      });
+    },
+    environmentId,
+  );
+}
+
+async function queryInventoryResources(
+  resourceType: string,
+  maximumPages: number,
+  operationName: string,
+  onPage?: (loaded: number, total: number, page: number) => void,
+  environmentId?: string,
+): Promise<PowerPlatformInventoryResult> {
   const resources: InventoryResource[] = [];
   const seenSkipTokens = new Set<string>();
   let skipToken: string | undefined;
   let reportedTotal = 0;
 
-  for (let page = 0; page < MAX_FLOW_PAGES; page += 1) {
+  for (let page = 0; page < maximumPages; page += 1) {
+    const clauses: Record<string, unknown>[] = [
+      {
+        $type: "where",
+        FieldName: "type",
+        Operator: "==",
+        Values: [`'${resourceType}'`],
+      },
+    ];
+    if (environmentId) {
+      clauses.push({
+        $type: "where",
+        FieldName: "properties.environmentId",
+        Operator: "=~",
+        Values: [`'${environmentId}'`],
+      });
+    }
+
     const query = {
       TableName: "PowerPlatformResources",
-      Clauses: [
-        {
-          $type: "where",
-          FieldName: "type",
-          Operator: "==",
-          Values: [`'${CLOUD_FLOW_RESOURCE_TYPE}'`],
-        },
-      ],
+      Clauses: clauses,
       Options: skipToken
         ? { Top: FLOW_PAGE_SIZE, SkipToken: skipToken }
         : { Top: FLOW_PAGE_SIZE },
@@ -352,10 +416,7 @@ async function listTenantFlowResources(
     );
 
     if (!result.success) {
-      throw createOperationError(
-        "Querying tenant cloud flow inventory",
-        result.error,
-      );
+      throw createOperationError(operationName, result.error);
     }
 
     const response = parseInventoryResponse(result.data);
@@ -366,12 +427,7 @@ async function listTenantFlowResources(
       response.totalRecords,
     );
 
-    onProgress({
-      phase: "loading-flows",
-      processedItems: resources.length,
-      totalItems: reportedTotal,
-      message: `Loading tenant cloud flow inventory page ${page + 1}.`,
-    });
+    onPage?.(resources.length, reportedTotal, page + 1);
 
     const nextSkipToken = response.skipToken ?? result.skipToken;
     if (!nextSkipToken) {
@@ -393,7 +449,7 @@ async function listTenantFlowResources(
   }
 
   throw new Error(
-    `Cloud flow inventory exceeded ${MAX_FLOW_PAGES} pages and was stopped to avoid an endless request loop.`,
+    `${operationName} exceeded ${maximumPages} pages and was stopped to avoid an endless request loop.`,
   );
 }
 
@@ -425,6 +481,186 @@ function readString(
   return typeof value === "string" && value.trim()
     ? value.trim()
     : undefined;
+}
+
+function normalizeInventoryEnvironment(
+  resource: InventoryResource,
+  issues: ScanIssue[],
+): TenantEnvironment | undefined {
+  const properties = getResourceProperties(resource);
+  const id = readString(resource, "name");
+
+  if (!id) {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Platform inventory",
+      message:
+        "An environment inventory record without an ID was skipped because it cannot be correlated with cloud flows.",
+    });
+    return undefined;
+  }
+
+  if (!properties) {
+    issues.push({
+      severity: "warning",
+      environmentId: id,
+      environmentName: id,
+      message:
+        "The environment inventory record returned an unreadable properties object.",
+    });
+  }
+
+  const environmentType =
+    readString(properties, "environmentType") ?? "Unknown";
+
+  return {
+    id,
+    displayName: readString(properties, "displayName") ?? id,
+    environmentType,
+    location: readString(resource, "location") ?? "Unknown",
+    isDefault: environmentType.toLowerCase() === "default",
+    provisioningState: "Unknown",
+    dataverseStatus: "unknown",
+  };
+}
+
+async function listInventoryEnvironments(): Promise<TenantEnvironmentDiscoveryResult> {
+  const issues: ScanIssue[] = [];
+  const inventory = await queryInventoryResources(
+    ENVIRONMENT_RESOURCE_TYPE,
+    MAX_ENVIRONMENT_PAGES,
+    "Querying tenant environment inventory",
+  );
+  const environments = inventory.resources.flatMap((resource) => {
+    const environment = normalizeInventoryEnvironment(resource, issues);
+    return environment ? [environment] : [];
+  });
+
+  if (inventory.isPossiblyIncomplete) {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Platform inventory",
+      message: `The inventory API reported ${inventory.reportedTotal.toLocaleString()} environments but returned ${environments.length.toLocaleString()}. Environment coverage might be incomplete.`,
+    });
+  }
+
+  return { environments, issues };
+}
+
+function mergeEnvironment(
+  current: TenantEnvironment | undefined,
+  incoming: TenantEnvironment,
+): TenantEnvironment {
+  if (!current) {
+    return incoming;
+  }
+
+  return {
+    id: current.id,
+    displayName:
+      incoming.displayName !== incoming.id
+        ? incoming.displayName
+        : current.displayName,
+    environmentType:
+      incoming.environmentType !== "Unknown"
+        ? incoming.environmentType
+        : current.environmentType,
+    location:
+      incoming.location !== "Unknown" ? incoming.location : current.location,
+    isDefault: current.isDefault || incoming.isDefault,
+    provisioningState:
+      incoming.provisioningState !== "Unknown"
+        ? incoming.provisioningState
+        : current.provisioningState,
+    dataverseStatus:
+      incoming.dataverseStatus !== "unknown"
+        ? incoming.dataverseStatus
+        : current.dataverseStatus,
+  };
+}
+
+function sortEnvironments(
+  environments: TenantEnvironment[],
+): TenantEnvironment[] {
+  return [...environments].sort((left, right) => {
+    if (left.isDefault !== right.isDefault) {
+      return left.isDefault ? -1 : 1;
+    }
+    return left.displayName.localeCompare(right.displayName);
+  });
+}
+
+function normalizeScanEnvironmentId(
+  environmentId: string | undefined,
+): string | undefined {
+  const normalized = environmentId?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (!ENVIRONMENT_ID_PATTERN.test(normalized)) {
+    throw new Error(
+      "The selected environment ID isn't in a supported Power Platform environment format.",
+    );
+  }
+  return normalized;
+}
+
+export async function discoverTenantEnvironments(): Promise<TenantEnvironmentDiscoveryResult> {
+  const [inventoryResult, adminResult] = await Promise.allSettled([
+    listInventoryEnvironments(),
+    listAdminEnvironments(),
+  ]);
+
+  if (
+    inventoryResult.status === "rejected" &&
+    adminResult.status === "rejected"
+  ) {
+    throw new Error(
+      `Environment discovery failed from both sources. Power Platform inventory: ${getErrorMessage(inventoryResult.reason)} Power Platform for Admins: ${getErrorMessage(adminResult.reason)}`,
+    );
+  }
+
+  const issues: ScanIssue[] = [];
+  const environmentsById = new Map<string, TenantEnvironment>();
+
+  if (inventoryResult.status === "fulfilled") {
+    issues.push(...inventoryResult.value.issues);
+    for (const environment of inventoryResult.value.environments) {
+      const key = environment.id.toLowerCase();
+      environmentsById.set(
+        key,
+        mergeEnvironment(environmentsById.get(key), environment),
+      );
+    }
+  } else {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Platform inventory",
+      message: `Environment inventory couldn't be queried. The scan continued with the admin connector: ${getErrorMessage(inventoryResult.reason)}`,
+    });
+  }
+
+  if (adminResult.status === "fulfilled") {
+    issues.push(...adminResult.value.issues);
+    for (const environment of adminResult.value.environments) {
+      const key = environment.id.toLowerCase();
+      environmentsById.set(
+        key,
+        mergeEnvironment(environmentsById.get(key), environment),
+      );
+    }
+  } else {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Platform for Admins",
+      message: `The admin environment list couldn't be queried. The scan continued with Power Platform inventory, so Dataverse database status can remain Unknown: ${getErrorMessage(adminResult.reason)}`,
+    });
+  }
+
+  return {
+    environments: sortEnvironments(Array.from(environmentsById.values())),
+    issues,
+  };
 }
 
 function mapFlowResource(
@@ -459,6 +695,15 @@ function mapFlowResource(
     readString(resource, "environmentId") ??
     readString(properties, "environmentId") ??
     "";
+
+  if (!environmentId) {
+    issues.push({
+      severity: "warning",
+      environmentName: "Tenant inventory",
+      message: `Flow ${id} didn't report an environment ID. It remains visible but can't receive a co-owner until the inventory record is complete.`,
+    });
+  }
+
   const environment = environmentId
     ? environmentsById.get(environmentId.toLowerCase())
     : undefined;
@@ -466,6 +711,8 @@ function mapFlowResource(
   if (environmentId && !environment) {
     unknownEnvironmentIds.add(environmentId);
   }
+
+  const workflowEntityId = readString(properties, "workflowEntityId");
 
   return {
     id,
@@ -480,6 +727,11 @@ function mapFlowResource(
     isDefaultEnvironment: environment?.isDefault === true,
     location:
       readString(resource, "location") ?? environment?.location ?? "Unknown",
+    dataverseStatus: environment?.dataverseStatus ?? "unknown",
+    workflowEntityId,
+    isSolutionAware:
+      environment?.dataverseStatus === "enabled" &&
+      Boolean(workflowEntityId),
     ownerId: readString(properties, "ownerId"),
     owner: {
       id: readString(properties, "ownerId"),
@@ -496,7 +748,12 @@ function mapFlowResource(
 
 export async function scanTenantFlows(
   onProgress: ProgressHandler,
+  scope: TenantFlowScanScope = {},
 ): Promise<TenantFlowScanResult> {
+  const requestedEnvironmentId = normalizeScanEnvironmentId(
+    scope.environmentId,
+  );
+
   onProgress({
     phase: "loading-environments",
     processedItems: 0,
@@ -505,30 +762,50 @@ export async function scanTenantFlows(
       "Discovering every Power Platform environment available to this administrator.",
   });
 
-  const environmentInventory = await listTenantEnvironments();
-  const environments = environmentInventory.environments.sort((left, right) => {
-    if (left.isDefault !== right.isDefault) {
-      return left.isDefault ? -1 : 1;
-    }
-    return left.displayName.localeCompare(right.displayName);
-  });
+  const environmentInventory = await discoverTenantEnvironments();
+  const requestedEnvironment = requestedEnvironmentId
+    ? environmentInventory.environments.find(
+        (environment) =>
+          environment.id.toLowerCase() ===
+          requestedEnvironmentId.toLowerCase(),
+      )
+    : undefined;
+  if (requestedEnvironmentId && !requestedEnvironment) {
+    throw new Error(
+      "The selected environment is no longer available to this administrator. Refresh the environment list and try again.",
+    );
+  }
+
+  const environments = requestedEnvironment
+    ? [requestedEnvironment]
+    : [...environmentInventory.environments];
   const environmentsById = new Map(
     environments.map((environment) => [
       environment.id.toLowerCase(),
       environment,
     ]),
   );
-  const issues = [...environmentInventory.issues];
+  const issues = environmentInventory.issues.filter(
+    (issue) =>
+      !requestedEnvironmentId ||
+      !issue.environmentId ||
+      issue.environmentId.toLowerCase() ===
+        requestedEnvironmentId.toLowerCase(),
+  );
 
   onProgress({
     phase: "loading-flows",
     processedItems: 0,
     totalItems: 0,
-    message:
-      "Querying the tenant-wide Power Platform inventory for cloud flows.",
+    message: requestedEnvironment
+      ? `Querying cloud flow inventory for ${requestedEnvironment.displayName}.`
+      : "Querying the tenant-wide Power Platform inventory for cloud flows.",
   });
 
-  const flowInventory = await listTenantFlowResources(onProgress);
+  const flowInventory = await listTenantFlowResources(
+    onProgress,
+    requestedEnvironmentId,
+  );
   const unknownEnvironmentIds = new Set<string>();
   const unvalidatedFlows = flowInventory.resources.flatMap((resource) => {
     const flow = mapFlowResource(
@@ -538,6 +815,30 @@ export async function scanTenantFlows(
       unknownEnvironmentIds,
     );
     return flow ? [flow] : [];
+  });
+
+  for (const environmentId of unknownEnvironmentIds) {
+    const matchingFlow = unvalidatedFlows.find(
+      (flow) =>
+        flow.environmentId.toLowerCase() === environmentId.toLowerCase(),
+    );
+    const environment: TenantEnvironment = {
+      id: environmentId,
+      displayName: `Environment ${environmentId}`,
+      environmentType: "Unknown",
+      location: matchingFlow?.location ?? "Unknown",
+      isDefault: false,
+      provisioningState: "Unknown",
+      dataverseStatus: "unknown",
+    };
+    environments.push(environment);
+    environmentsById.set(environmentId.toLowerCase(), environment);
+  }
+  environments.sort((left, right) => {
+    if (left.isDefault !== right.isDefault) {
+      return left.isDefault ? -1 : 1;
+    }
+    return left.displayName.localeCompare(right.displayName);
   });
 
   if (flowInventory.isPossiblyIncomplete) {
@@ -552,7 +853,7 @@ export async function scanTenantFlows(
     issues.push({
       severity: "warning",
       environmentName: "Tenant inventory",
-      message: `${unknownEnvironmentIds.size.toLocaleString()} environment ID(s) referenced by flow inventory weren't present in the active environment list. Their flows remain visible with an ID-based environment label.`,
+      message: `${unknownEnvironmentIds.size.toLocaleString()} environment ID(s) referenced by flow inventory weren't returned by either environment-discovery source. They were added with ID-based labels so their flows remain selectable.`,
     });
   }
 
@@ -595,7 +896,7 @@ export async function scanTenantFlows(
     issues.push({
       severity: "warning",
       environmentName: "Microsoft Entra ID",
-      message: `${unknownOwners.length.toLocaleString()} owner lookup(s) couldn't be classified. These flows remain in Unknown status and aren't eligible for co-owner recovery. ${unknownOwners[0]?.error ?? ""}`.trim(),
+      message: `${unknownOwners.length.toLocaleString()} owner lookup(s) couldn't be classified. These flows remain in Unknown status; review the owner and flow details before assigning a co-owner. ${unknownOwners[0]?.error ?? ""}`.trim(),
     });
   }
 

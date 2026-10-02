@@ -1,6 +1,13 @@
-import { useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import "./App.css";
-import { ReassignmentDialog } from "./components/ReassignmentDialog";
+import { CoOwnerAssignmentDialog } from "./components/CoOwnerAssignmentDialog";
+import { SendCopyDialog } from "./components/SendCopyDialog";
 import type {
   DirectoryUser,
   OwnerStatus,
@@ -8,22 +15,27 @@ import type {
 } from "./services/directoryUsers";
 import {
   getFlowKey,
-  MAX_REASSIGNMENT_BATCH,
-  type FlowReassignmentResult,
+  MAX_COOWNER_ASSIGNMENT_BATCH,
+  type FlowCoOwnerAssignmentResult,
 } from "./services/flowOwnership";
 import {
+  discoverTenantEnvironments,
   scanTenantFlows,
+  type DataverseStatus,
   type ScanIssue,
   type ScanProgress,
   type TenantEnvironment,
+  type TenantEnvironmentDiscoveryResult,
   type TenantFlow,
 } from "./services/tenantFlowInventory";
 
 const PAGE_SIZE = 50;
 
 type ScanStatus = "idle" | "scanning" | "complete" | "error";
+type EnvironmentOptionsStatus = "loading" | "ready" | "error";
 type SortDirection = "ascending" | "descending";
-type OwnerFilter = OwnerStatus | "all" | "reported" | "recovered";
+type OwnerFilter = OwnerStatus | "all" | "reported" | "assigned";
+type DataverseFilter = DataverseStatus | "all";
 type MetricFilter =
   | "environments"
   | "flows"
@@ -60,6 +72,12 @@ const MODIFIED_FILTER_OPTIONS: ModifiedFilter[] = [
   "older365",
   "missing",
 ];
+const DATAVERSE_FILTER_LABELS: Record<DataverseFilter, string> = {
+  all: "Any database status",
+  enabled: "Dataverse database",
+  "not-provisioned": "No Dataverse database",
+  unknown: "Database status unknown",
+};
 
 function ownerStatusLabel(status: OwnerStatus): string {
   const labels: Record<OwnerStatus, string> = {
@@ -68,6 +86,15 @@ function ownerStatusLabel(status: OwnerStatus): string {
     orphaned: "Deleted user",
     unknown: "Unknown",
     missing: "Owner ID missing",
+  };
+  return labels[status];
+}
+
+function dataverseStatusLabel(status: DataverseStatus): string {
+  const labels: Record<DataverseStatus, string> = {
+    enabled: "Dataverse",
+    "not-provisioned": "No Dataverse",
+    unknown: "Database unknown",
   };
   return labels[status];
 }
@@ -86,9 +113,13 @@ function isOwnerFilter(value: string): value is OwnerFilter {
   return (
     value === "all" ||
     value === "reported" ||
-    value === "recovered" ||
+    value === "assigned" ||
     isOwnerStatus(value)
   );
+}
+
+function isDataverseFilter(value: string): value is DataverseFilter {
+  return value in DATAVERSE_FILTER_LABELS;
 }
 
 function matchesModifiedFilter(
@@ -184,6 +215,22 @@ function sortFlows(
 function App() {
   const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  const [environmentOptionsStatus, setEnvironmentOptionsStatus] =
+    useState<EnvironmentOptionsStatus>("loading");
+  const [availableEnvironments, setAvailableEnvironments] = useState<
+    TenantEnvironment[]
+  >([]);
+  const [environmentOptionsError, setEnvironmentOptionsError] = useState<
+    string | null
+  >(null);
+  const [environmentOptionsIssueCount, setEnvironmentOptionsIssueCount] =
+    useState(0);
+  const [scanDefaultEnvironmentOnly, setScanDefaultEnvironmentOnly] =
+    useState(false);
+  const [scanEnvironmentId, setScanEnvironmentId] = useState("all");
+  const [completedScanScope, setCompletedScanScope] = useState<string | null>(
+    null,
+  );
   const [environments, setEnvironments] = useState<TenantEnvironment[]>([]);
   const [flows, setFlows] = useState<TenantFlow[]>([]);
   const [issues, setIssues] = useState<ScanIssue[]>([]);
@@ -195,22 +242,118 @@ function App() {
   const [ownerIdFilter, setOwnerIdFilter] = useState("all");
   const [environmentTypeFilter, setEnvironmentTypeFilter] = useState("all");
   const [locationFilter, setLocationFilter] = useState("all");
+  const [dataverseFilter, setDataverseFilter] =
+    useState<DataverseFilter>("all");
   const [modifiedFilter, setModifiedFilter] =
     useState<ModifiedFilter>("all");
   const [defaultEnvironmentOnly, setDefaultEnvironmentOnly] = useState(false);
   const [selectedFlowKeys, setSelectedFlowKeys] = useState<Set<string>>(
     new Set(),
   );
-  const [isReassignmentOpen, setIsReassignmentOpen] = useState(false);
-  const [reassignmentFlows, setReassignmentFlows] = useState<TenantFlow[]>(
-    [],
-  );
+  const [isCoOwnerAssignmentOpen, setIsCoOwnerAssignmentOpen] =
+    useState(false);
+  const [coOwnerAssignmentFlows, setCoOwnerAssignmentFlows] = useState<
+    TenantFlow[]
+  >([]);
+  const [sendCopyFlow, setSendCopyFlow] = useState<TenantFlow | null>(null);
   const [sort, setSort] = useState<SortState>({
     field: "lastModifiedTime",
     direction: "descending",
   });
   const [page, setPage] = useState(1);
   const inventoryPanelRef = useRef<HTMLElement>(null);
+
+  const defaultScanEnvironment = useMemo(
+    () =>
+      availableEnvironments.find((environment) => environment.isDefault),
+    [availableEnvironments],
+  );
+  const selectedScanEnvironment = useMemo(
+    () =>
+      scanEnvironmentId === "all"
+        ? undefined
+        : availableEnvironments.find(
+            (environment) =>
+              environment.id.toLowerCase() ===
+              scanEnvironmentId.toLowerCase(),
+          ),
+    [availableEnvironments, scanEnvironmentId],
+  );
+  const pendingScanEnvironment = scanDefaultEnvironmentOnly
+    ? defaultScanEnvironment
+    : selectedScanEnvironment;
+  const pendingScanScopeLabel = scanDefaultEnvironmentOnly
+    ? defaultScanEnvironment
+      ? `Default environment: ${defaultScanEnvironment.displayName}`
+      : "Default environment"
+    : selectedScanEnvironment?.displayName ?? "All environments";
+  const scanScopeReady =
+    environmentOptionsStatus === "ready" &&
+    (!scanDefaultEnvironmentOnly || Boolean(defaultScanEnvironment)) &&
+    (scanEnvironmentId === "all" || Boolean(selectedScanEnvironment));
+
+  const applyEnvironmentOptions = useCallback(
+    (result: TenantEnvironmentDiscoveryResult) => {
+      if (result.environments.length === 0) {
+        throw new Error(
+          "No active Power Platform environments are available to this administrator.",
+        );
+      }
+
+      setAvailableEnvironments(result.environments);
+      setEnvironmentOptionsIssueCount(result.issues.length);
+      setEnvironmentOptionsError(null);
+      setScanEnvironmentId((current) =>
+        current === "all" ||
+        result.environments.some(
+          (environment) =>
+            environment.id.toLowerCase() === current.toLowerCase(),
+        )
+          ? current
+          : "all",
+      );
+      setEnvironmentOptionsStatus("ready");
+    },
+    [],
+  );
+
+  const applyEnvironmentOptionsError = useCallback((error: unknown) => {
+    setAvailableEnvironments([]);
+    setEnvironmentOptionsIssueCount(0);
+    setEnvironmentOptionsError(errorMessage(error));
+    setEnvironmentOptionsStatus("error");
+  }, []);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    void discoverTenantEnvironments()
+      .then((result) => {
+        if (isCurrent) {
+          applyEnvironmentOptions(result);
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) {
+          applyEnvironmentOptionsError(error);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [applyEnvironmentOptions, applyEnvironmentOptionsError]);
+
+  const refreshEnvironmentOptions = useCallback(async () => {
+    setEnvironmentOptionsStatus("loading");
+    setEnvironmentOptionsError(null);
+
+    try {
+      applyEnvironmentOptions(await discoverTenantEnvironments());
+    } catch (error) {
+      applyEnvironmentOptionsError(error);
+    }
+  }, [applyEnvironmentOptions, applyEnvironmentOptionsError]);
 
   const environmentTypes = useMemo(
     () =>
@@ -235,17 +378,17 @@ function App() {
               ...(flow.owner.id
                 ? [[flow.owner.id.toLowerCase(), flow.owner] as const]
                 : []),
-              ...(flow.recoveryOwner
+              ...(flow.assignedCoOwner
                 ? [
                     [
-                      flow.recoveryOwner.id.toLowerCase(),
+                      flow.assignedCoOwner.id.toLowerCase(),
                       {
-                        id: flow.recoveryOwner.id,
+                        id: flow.assignedCoOwner.id,
                         status: "active" as const,
-                        displayName: flow.recoveryOwner.displayName,
+                        displayName: flow.assignedCoOwner.displayName,
                         userPrincipalName:
-                          flow.recoveryOwner.userPrincipalName,
-                        mail: flow.recoveryOwner.mail,
+                          flow.assignedCoOwner.userPrincipalName,
+                        mail: flow.assignedCoOwner.mail,
                       },
                     ] as const,
                   ]
@@ -266,9 +409,10 @@ function App() {
   const environmentFlowCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const flow of flows) {
+      const environmentId = flow.environmentId.toLowerCase();
       counts.set(
-        flow.environmentId,
-        (counts.get(flow.environmentId) ?? 0) + 1,
+        environmentId,
+        (counts.get(environmentId) ?? 0) + 1,
       );
     }
     return counts;
@@ -290,35 +434,39 @@ function App() {
         flow.owner.userPrincipalName
           ?.toLowerCase()
           .includes(normalizedSearch) ||
-        flow.recoveryOwner?.displayName
+        flow.assignedCoOwner?.displayName
           .toLowerCase()
           .includes(normalizedSearch) ||
-        flow.recoveryOwner?.userPrincipalName
+        flow.assignedCoOwner?.userPrincipalName
           ?.toLowerCase()
           .includes(normalizedSearch);
       const matchesEnvironment =
         environmentFilter === "all" ||
-        flow.environmentId === environmentFilter;
+        flow.environmentId.toLowerCase() ===
+          environmentFilter.toLowerCase();
       const matchesOwner =
         ownerFilter === "all" ||
         (ownerFilter === "reported" && Boolean(flow.owner.id)) ||
-        (ownerFilter === "recovered" && Boolean(flow.recoveryOwner)) ||
+        (ownerFilter === "assigned" && Boolean(flow.assignedCoOwner)) ||
         (ownerFilter === "orphaned" &&
           flow.owner.status === "orphaned" &&
-          !flow.recoveryOwner) ||
+          !flow.assignedCoOwner) ||
         (ownerFilter !== "orphaned" &&
-          ownerFilter !== "recovered" &&
+          ownerFilter !== "assigned" &&
           ownerFilter !== "reported" &&
           flow.owner.status === ownerFilter);
       const matchesOwnerId =
         ownerIdFilter === "all" ||
         flow.owner.id?.toLowerCase() === ownerIdFilter ||
-        flow.recoveryOwner?.id.toLowerCase() === ownerIdFilter;
+        flow.assignedCoOwner?.id.toLowerCase() === ownerIdFilter;
       const matchesEnvironmentType =
         environmentTypeFilter === "all" ||
         flow.environmentType === environmentTypeFilter;
       const matchesLocation =
         locationFilter === "all" || flow.location === locationFilter;
+      const matchesDataverse =
+        dataverseFilter === "all" ||
+        flow.dataverseStatus === dataverseFilter;
       const matchesDefault =
         !defaultEnvironmentOnly || flow.isDefaultEnvironment;
       const matchesModified = matchesModifiedFilter(
@@ -334,6 +482,7 @@ function App() {
         matchesOwnerId &&
         matchesEnvironmentType &&
         matchesLocation &&
+        matchesDataverse &&
         matchesDefault &&
         matchesModified
       );
@@ -342,6 +491,7 @@ function App() {
     return sortFlows(matchingFlows, sort);
   }, [
     defaultEnvironmentOnly,
+    dataverseFilter,
     environmentFilter,
     environmentTypeFilter,
     flows,
@@ -374,10 +524,10 @@ function App() {
     flows.flatMap((flow) => (flow.ownerId ? [flow.ownerId] : [])),
   ).size;
   const orphanedFlowCount = flows.filter(
-    (flow) => flow.owner.status === "orphaned" && !flow.recoveryOwner,
+    (flow) => flow.owner.status === "orphaned" && !flow.assignedCoOwner,
   ).length;
-  const recoveredFlowCount = flows.filter((flow) =>
-    Boolean(flow.recoveryOwner),
+  const recoveredOrphanedFlowCount = flows.filter(
+    (flow) => flow.owner.status === "orphaned" && flow.assignedCoOwner,
   ).length;
   const disabledOwnerFlowCount = flows.filter(
     (flow) => flow.owner.status === "disabled",
@@ -389,6 +539,13 @@ function App() {
   const selectedFlows = flows.filter((flow) =>
     selectedFlowKeys.has(getFlowKey(flow)),
   );
+  const selectionIncludesAssignedCoOwner = selectedFlows.some((flow) =>
+    Boolean(flow.assignedCoOwner),
+  );
+  const selectedCopyFlow =
+    selectedFlows.length === 1 ? selectedFlows[0] : undefined;
+  const canSendCopy =
+    Boolean(selectedCopyFlow) && !selectedCopyFlow?.isSolutionAware;
   const failedEnvironmentIds = new Set(
     issues
       .filter(
@@ -400,6 +557,9 @@ function App() {
     0,
     environments.length - failedEnvironmentIds.size,
   );
+  const dataverseEnvironmentCount = environments.filter(
+    (environment) => environment.dataverseStatus === "enabled",
+  ).length;
   const activeFilterCount = [
     Boolean(searchText.trim()),
     environmentFilter !== "all",
@@ -407,6 +567,7 @@ function App() {
     ownerIdFilter !== "all",
     environmentTypeFilter !== "all",
     locationFilter !== "all",
+    dataverseFilter !== "all",
     modifiedFilter !== "all",
     defaultEnvironmentOnly,
   ].filter(Boolean).length;
@@ -430,20 +591,32 @@ function App() {
   })();
 
   async function startScan() {
+    if (!scanScopeReady) {
+      setScanError(
+        "The scan scope isn't ready. Refresh the environment list and select a valid scope.",
+      );
+      return;
+    }
+
     setScanStatus("scanning");
     setScanError(null);
     setIssues([]);
+    clearAllFilters();
     setPage(1);
     setSelectedFlowKeys(new Set());
-    setIsReassignmentOpen(false);
-    setReassignmentFlows([]);
+    setIsCoOwnerAssignmentOpen(false);
+    setCoOwnerAssignmentFlows([]);
+    setSendCopyFlow(null);
 
     try {
-      const result = await scanTenantFlows(setProgress);
+      const result = await scanTenantFlows(setProgress, {
+        environmentId: pendingScanEnvironment?.id,
+      });
       setEnvironments(result.environments);
       setFlows(result.flows);
       setIssues(result.issues);
       setScannedAt(result.scannedAt);
+      setCompletedScanScope(pendingScanScopeLabel);
       setScanStatus("complete");
     } catch (error) {
       setScanError(errorMessage(error));
@@ -458,6 +631,7 @@ function App() {
     setOwnerIdFilter("all");
     setEnvironmentTypeFilter("all");
     setLocationFilter("all");
+    setDataverseFilter("all");
     setModifiedFilter("all");
     setDefaultEnvironmentOnly(false);
     setPage(1);
@@ -492,16 +666,16 @@ function App() {
       const next = new Set(current);
       if (next.has(key)) {
         next.delete(key);
-      } else if (next.size < MAX_REASSIGNMENT_BATCH) {
+      } else if (next.size < MAX_COOWNER_ASSIGNMENT_BATCH) {
         next.add(key);
       }
       return next;
     });
   }
 
-  function handleReassignmentApplied(
-    results: FlowReassignmentResult[],
-    replacement: DirectoryUser,
+  function handleCoOwnerAssignmentApplied(
+    results: FlowCoOwnerAssignmentResult[],
+    coOwner: DirectoryUser,
   ) {
     const successfulKeys = new Set(
       results
@@ -514,7 +688,7 @@ function App() {
         successfulKeys.has(getFlowKey(flow))
           ? {
               ...flow,
-              recoveryOwner: replacement,
+              assignedCoOwner: coOwner,
             }
           : flow,
       ),
@@ -562,10 +736,12 @@ function App() {
       "Owner display name",
       "Owner user principal name",
       "Owner object ID",
-      "Recovery status",
-      "Recovery co-owner display name",
-      "Recovery co-owner user principal name",
-      "Recovery co-owner object ID",
+      "Co-owner assignment status",
+      "Assigned co-owner display name",
+      "Assigned co-owner user principal name",
+      "Assigned co-owner object ID",
+      "Dataverse database status",
+      "Solution-aware flow",
       "Created by object ID",
       "Created",
       "Last modified",
@@ -582,10 +758,12 @@ function App() {
       flow.owner.displayName,
       flow.owner.userPrincipalName ?? "",
       flow.ownerId ?? "",
-      flow.recoveryOwner ? "Co-owner added" : "",
-      flow.recoveryOwner?.displayName ?? "",
-      flow.recoveryOwner?.userPrincipalName ?? "",
-      flow.recoveryOwner?.id ?? "",
+      flow.assignedCoOwner ? "Co-owner added" : "",
+      flow.assignedCoOwner?.displayName ?? "",
+      flow.assignedCoOwner?.userPrincipalName ?? "",
+      flow.assignedCoOwner?.id ?? "",
+      flow.dataverseStatus,
+      flow.isSolutionAware ? "Yes" : "No",
       flow.createdBy ?? "",
       flow.createdTime ?? "",
       flow.lastModifiedTime ?? "",
@@ -621,7 +799,7 @@ function App() {
             <span className="status-dot" aria-hidden="true" />
             <span>Admin inventory</span>
             <span className="header-divider" aria-hidden="true" />
-            <span>Confirmed co-owner recovery</span>
+            <span>Confirmed co-owner assignment</span>
           </div>
         </div>
       </header>
@@ -632,25 +810,115 @@ function App() {
             <p className="section-kicker">TENANT INVENTORY</p>
             <h2>Find every cloud flow. Start with a trusted baseline.</h2>
             <p className="hero-copy">
-              Scan every Power Platform environment available to a Power
-              Platform or Dynamics 365 administrator, including the default
-              environment. Owner IDs are validated against Microsoft Entra ID,
-              and orphan recovery adds a valid co-owner only after an explicit
-              preview and confirmation.
+              Choose all environments, only the Default environment, or one
+              Power Platform environment before scanning. Dataverse status
+              comes from the environment record, owner IDs are validated
+              against Microsoft Entra ID, and co-owner access is granted only
+              after an explicit preview and confirmation.
             </p>
           </div>
           <div className="hero-actions">
+            <div className="scan-scope-panel">
+              <div className="scan-scope-heading">
+                <strong>Scan scope</strong>
+                <span>{pendingScanScopeLabel}</span>
+              </div>
+
+              <label className="scan-default-option">
+                <input
+                  type="checkbox"
+                  checked={scanDefaultEnvironmentOnly}
+                  disabled={
+                    environmentOptionsStatus !== "ready" ||
+                    !defaultScanEnvironment ||
+                    scanStatus === "scanning"
+                  }
+                  onChange={(event) =>
+                    setScanDefaultEnvironmentOnly(event.target.checked)
+                  }
+                />
+                <span>Scan only the Default environment</span>
+              </label>
+
+              <label className="scan-environment-option">
+                <span>Power Platform environment</span>
+                <select
+                  value={scanEnvironmentId}
+                  disabled={
+                    environmentOptionsStatus !== "ready" ||
+                    scanDefaultEnvironmentOnly ||
+                    scanStatus === "scanning"
+                  }
+                  onChange={(event) =>
+                    setScanEnvironmentId(event.target.value)
+                  }
+                >
+                  <option value="all">
+                    {environmentOptionsStatus === "loading"
+                      ? "Loading environments..."
+                      : "All environments"}
+                  </option>
+                  {availableEnvironments.map((environment) => (
+                    <option key={environment.id} value={environment.id}>
+                      {environment.displayName}
+                      {environment.isDefault ? " (Default)" : ""}
+                      {` - ${environment.environmentType} - ${dataverseStatusLabel(environment.dataverseStatus)}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {environmentOptionsStatus === "loading" ? (
+                <p className="scan-scope-status" aria-live="polite">
+                  Loading tenant environments before scanning...
+                </p>
+              ) : null}
+              {environmentOptionsStatus === "ready" ? (
+                <p className="scan-scope-status">
+                  {availableEnvironments.length.toLocaleString()} active
+                  environment
+                  {availableEnvironments.length === 1 ? "" : "s"} available
+                  {environmentOptionsIssueCount > 0
+                    ? `; ${environmentOptionsIssueCount.toLocaleString()} discovery note${environmentOptionsIssueCount === 1 ? "" : "s"} will be rechecked during the scan`
+                    : ""}
+                  .
+                </p>
+              ) : null}
+              {environmentOptionsStatus === "error" ? (
+                <div className="scan-scope-error" role="alert">
+                  <span>{environmentOptionsError}</span>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void refreshEnvironmentOptions()}
+                  >
+                    Retry environment list
+                  </button>
+                </div>
+              ) : null}
+              {scanDefaultEnvironmentOnly &&
+              environmentOptionsStatus === "ready" &&
+              !defaultScanEnvironment ? (
+                <p className="scan-scope-error" role="alert">
+                  The tenant environment list didn't identify a Default
+                  environment. Choose an environment from the list instead.
+                </p>
+              ) : null}
+            </div>
+
             <button
               className="primary-button"
               type="button"
               onClick={startScan}
-              disabled={scanStatus === "scanning"}
+              disabled={scanStatus === "scanning" || !scanScopeReady}
             >
               {scanStatus === "scanning"
-                ? "Scanning tenant..."
+                ? "Scanning..."
                 : flows.length > 0
-                  ? "Scan again"
-                  : "Scan tenant"}
+                  ? "Scan selected scope again"
+                  : pendingScanEnvironment
+                    ? "Scan selected environment"
+                    : "Scan all environments"}
             </button>
             <button
               className="secondary-button"
@@ -662,8 +930,8 @@ function App() {
             </button>
             <p className="last-scan">
               {scannedAt
-                ? `Last completed ${formatDate(scannedAt)}`
-                : "No tenant scan has been completed."}
+                ? `Last completed ${formatDate(scannedAt)} · ${completedScanScope ?? "All environments"}`
+                : "Choose a scope before starting the first scan."}
             </p>
           </div>
         </section>
@@ -731,7 +999,7 @@ function App() {
             </strong>
             <span className="metric-detail">
               {environments.length > 0
-                ? `of ${environments.length.toLocaleString()} active environments`
+                ? `${environments.length.toLocaleString()} scanned; ${dataverseEnvironmentCount.toLocaleString()} with Dataverse`
                 : "Default environment included"}
             </span>
             <span className="metric-action">View by environment</span>
@@ -752,7 +1020,9 @@ function App() {
             <strong>
               {scanStatus === "idle" ? "--" : flows.length.toLocaleString()}
             </strong>
-            <span className="metric-detail">Tenant-wide inventory</span>
+            <span className="metric-detail">
+              {completedScanScope ?? "No scope scanned"}
+            </span>
             <span className="metric-action">Show all flows</span>
           </button>
           <button
@@ -783,8 +1053,8 @@ function App() {
                 : orphanedFlowCount.toLocaleString()}
             </strong>
             <span className="metric-detail">
-              {recoveredFlowCount > 0
-                ? `${recoveredFlowCount.toLocaleString()} recovered this session`
+              {recoveredOrphanedFlowCount > 0
+                ? `${recoveredOrphanedFlowCount.toLocaleString()} recovered this session`
                 : "Owner no longer exists"}
             </span>
             <span className="metric-action">Filter orphaned flows</span>
@@ -816,6 +1086,9 @@ function App() {
             <div>
               <p className="section-kicker">FLOW INVENTORY</p>
               <h2>Tenant cloud flows</h2>
+              <p className="inventory-scope">
+                Scan scope: {completedScanScope ?? "Not scanned"}
+              </p>
             </div>
             <div className="result-count">
               {filteredFlows.length.toLocaleString()} of{" "}
@@ -850,7 +1123,12 @@ function App() {
                   <option key={environment.id} value={environment.id}>
                     {environment.displayName}
                     {environment.isDefault ? " (Default)" : ""}
-                    {` (${(environmentFlowCounts.get(environment.id) ?? 0).toLocaleString()})`}
+                    {environment.dataverseStatus === "enabled"
+                      ? " - Dataverse"
+                      : environment.dataverseStatus === "not-provisioned"
+                        ? " - No Dataverse"
+                        : ""}
+                    {` (${(environmentFlowCounts.get(environment.id.toLowerCase()) ?? 0).toLocaleString()})`}
                   </option>
                 ))}
               </select>
@@ -868,7 +1146,7 @@ function App() {
               >
                 <option value="all">All owner records</option>
                 <option value="reported">Owner ID reported</option>
-                <option value="recovered">Recovery co-owner added</option>
+                <option value="assigned">Co-owner added this session</option>
                 <option value="orphaned">Deleted users</option>
                 <option value="active">Active users</option>
                 <option value="disabled">Disabled users</option>
@@ -927,6 +1205,28 @@ function App() {
                 {locations.map((location) => (
                   <option key={location} value={location}>
                     {location}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Dataverse</span>
+              <select
+                value={dataverseFilter}
+                onChange={(event) => {
+                  if (isDataverseFilter(event.target.value)) {
+                    setDataverseFilter(event.target.value);
+                    setPage(1);
+                  }
+                }}
+              >
+                {(
+                  Object.keys(
+                    DATAVERSE_FILTER_LABELS,
+                  ) as DataverseFilter[]
+                ).map((value) => (
+                  <option key={value} value={value}>
+                    {DATAVERSE_FILTER_LABELS[value]}
                   </option>
                 ))}
               </select>
@@ -1009,8 +1309,8 @@ function App() {
                     Owner status:{" "}
                     {ownerFilter === "reported"
                       ? "Owner ID reported"
-                      : ownerFilter === "recovered"
-                        ? "Recovery co-owner added"
+                      : ownerFilter === "assigned"
+                        ? "Co-owner added this session"
                         : ownerStatusLabel(ownerFilter)}{" "}
                     <span>x</span>
                   </button>
@@ -1053,6 +1353,17 @@ function App() {
                     Region: {locationFilter} <span>x</span>
                   </button>
                 ) : null}
+                {dataverseFilter !== "all" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDataverseFilter("all");
+                      setPage(1);
+                    }}
+                  >
+                    {DATAVERSE_FILTER_LABELS[dataverseFilter]} <span>x</span>
+                  </button>
+                ) : null}
                 {modifiedFilter !== "all" ? (
                   <button
                     type="button"
@@ -1090,11 +1401,14 @@ function App() {
             <div className="selection-bar">
               <div>
                 <strong>
-                  {selectedFlowKeys.size} orphaned flow
+                  {selectedFlowKeys.size} flow
                   {selectedFlowKeys.size === 1 ? "" : "s"} selected
                 </strong>
-                <span>
-                  Up to {MAX_REASSIGNMENT_BATCH} flows per confirmed batch
+                <span id="selection-guidance">
+                  {selectedCopyFlow?.isSolutionAware
+                    ? "Solution-aware flow selected: use Save As or solution export/import instead of Send a copy"
+                    : "Select one non-solution flow to send a copy, or up to " +
+                      `${MAX_COOWNER_ASSIGNMENT_BATCH} flows to assign co-owners`}
                 </span>
               </div>
               <div>
@@ -1106,14 +1420,37 @@ function App() {
                   Clear selection
                 </button>
                 <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={!canSendCopy}
+                  aria-describedby="selection-guidance"
+                  title={
+                    selectedFlows.length !== 1
+                      ? "Select exactly one flow to send a copy"
+                      : selectedCopyFlow?.isSolutionAware
+                        ? "Solution-aware flows use Save As or solution export instead of Send a copy"
+                        : "Open the supported Send a copy workflow"
+                  }
+                  onClick={() => setSendCopyFlow(selectedCopyFlow ?? null)}
+                >
+                  Send a copy
+                </button>
+                <button
                   className="primary-button"
                   type="button"
+                  disabled={selectionIncludesAssignedCoOwner}
+                  aria-describedby="selection-guidance"
+                  title={
+                    selectionIncludesAssignedCoOwner
+                      ? "One or more selected flows already received a co-owner in this session"
+                      : "Assign an active Microsoft Entra user as co-owner"
+                  }
                   onClick={() => {
-                    setReassignmentFlows(selectedFlows);
-                    setIsReassignmentOpen(true);
+                    setCoOwnerAssignmentFlows(selectedFlows);
+                    setIsCoOwnerAssignmentOpen(true);
                   }}
                 >
-                  Assign recovery co-owner
+                  Assign new co-owner
                 </button>
               </div>
             </div>
@@ -1124,7 +1461,9 @@ function App() {
               <thead>
                 <tr>
                   <th className="selection-column">
-                    <span className="visually-hidden">Select orphaned flow</span>
+                    <span className="visually-hidden">
+                      Select flow for co-owner assignment
+                    </span>
                   </th>
                   <th aria-sort={ariaSort("displayName")}>
                     <button
@@ -1178,14 +1517,14 @@ function App() {
                     <td className="selection-column">
                       <input
                         type="checkbox"
-                        aria-label={`Select ${flow.displayName} for co-owner recovery`}
+                        aria-label={`Select ${flow.displayName} for co-owner assignment`}
                         checked={selectedFlowKeys.has(getFlowKey(flow))}
                         onChange={() => toggleFlowSelection(flow)}
                         disabled={
-                          flow.owner.status !== "orphaned" ||
-                          Boolean(flow.recoveryOwner) ||
+                          !flow.environmentId ||
                           (!selectedFlowKeys.has(getFlowKey(flow)) &&
-                            selectedFlowKeys.size >= MAX_REASSIGNMENT_BATCH)
+                            selectedFlowKeys.size >=
+                              MAX_COOWNER_ASSIGNMENT_BATCH)
                         }
                       />
                     </td>
@@ -1201,24 +1540,32 @@ function App() {
                         {flow.isDefaultEnvironment ? (
                           <span className="default-badge">Default</span>
                         ) : null}
+                        <span
+                          className={`database-badge database-${flow.dataverseStatus}`}
+                        >
+                          {dataverseStatusLabel(flow.dataverseStatus)}
+                        </span>
                       </div>
                     </td>
                     <td>
-                      {flow.recoveryOwner ? (
+                      {flow.assignedCoOwner ? (
                         <div className="owner-cell">
                           <div>
-                            <strong>{flow.recoveryOwner.displayName}</strong>
+                            <strong>{flow.assignedCoOwner.displayName}</strong>
                             <small>
-                              {flow.recoveryOwner.userPrincipalName ??
-                                flow.recoveryOwner.mail ??
-                                flow.recoveryOwner.id}
+                              {flow.assignedCoOwner.userPrincipalName ??
+                                flow.assignedCoOwner.mail ??
+                                flow.assignedCoOwner.id}
                             </small>
                             <small>
-                              Deleted primary owner: {flow.owner.id}
+                              Primary owner:{" "}
+                              {flow.owner.userPrincipalName ??
+                                flow.owner.id ??
+                                "Not reported"}
                             </small>
                           </div>
                           <span className="owner-status owner-recovered">
-                            Recovery co-owner added
+                            Co-owner added
                           </span>
                         </div>
                       ) : (
@@ -1336,21 +1683,28 @@ function App() {
         ) : null}
       </main>
 
-      {isReassignmentOpen && reassignmentFlows.length > 0 ? (
-        <ReassignmentDialog
-          flows={reassignmentFlows}
+      {isCoOwnerAssignmentOpen && coOwnerAssignmentFlows.length > 0 ? (
+        <CoOwnerAssignmentDialog
+          flows={coOwnerAssignmentFlows}
           onClose={() => {
-            setIsReassignmentOpen(false);
-            setReassignmentFlows([]);
+            setIsCoOwnerAssignmentOpen(false);
+            setCoOwnerAssignmentFlows([]);
           }}
-          onApplied={handleReassignmentApplied}
+          onApplied={handleCoOwnerAssignmentApplied}
+        />
+      ) : null}
+
+      {sendCopyFlow ? (
+        <SendCopyDialog
+          flow={sendCopyFlow}
+          onClose={() => setSendCopyFlow(null)}
         />
       ) : null}
 
       <footer>
         <span>Orphaned Flow Finder</span>
         <span>
-          Phase 2: directory validation and confirmed co-owner recovery
+          Phase 2: tenant-wide validation and confirmed co-owner assignment
         </span>
       </footer>
     </div>

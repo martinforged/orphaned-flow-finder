@@ -4,7 +4,7 @@
 
 Use:
 
-`OrphanedFlowFinder_1_0_0_0_managed.zip`
+`OrphanedFlowFinder_1_1_0_0_managed.zip`
 
 This is the recommended package for production, UAT, and normal tenant
 installations. Import it through **Power Apps > Solutions > Import solution**.
@@ -13,7 +13,7 @@ installations. Import it through **Power Apps > Solutions > Import solution**.
 
 Use:
 
-`OrphanedFlowFinder_1_0_0_0_unmanaged.zip`
+`OrphanedFlowFinder_1_1_0_0_unmanaged.zip`
 
 Only use the unmanaged package when the target organization intentionally
 takes ownership of customizations and future development.
@@ -28,6 +28,13 @@ Each package contains:
 - Office 365 Users connection reference
 - Power Automate Management connection reference
 
+The current packages use solution version **1.1.0.0** and include the pre-scan
+environment scope selector, authoritative Dataverse/No Dataverse badges,
+co-owner assignment, and guided Send a copy workflow.
+
+The `1.0.0.0` ZIPs are retained for historical comparison. New installations
+and updates should use `1.1.0.0`.
+
 Connections aren't transported between tenants. Create the four target
 connections and map the imported connection references as described in
 [the deployment guide](../DEPLOYMENT-GUIDE.md).
@@ -35,4 +42,5 @@ connections and map the imported connection references as described in
 ## Integrity
 
 Verify downloaded packages against [SHA256SUMS.txt](./SHA256SUMS.txt) before
-importing them.
+importing them. The checksum file covers both current and retained historical
+packages.

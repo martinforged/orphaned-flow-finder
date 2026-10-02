@@ -3,11 +3,11 @@ import type { ModifyFlowPermissionPayload } from "../generated/models/PowerAutom
 import type { DirectoryUser } from "./directoryUsers";
 import type { TenantFlow } from "./tenantFlowInventory";
 
-export const MAX_REASSIGNMENT_BATCH = 5;
+export const MAX_COOWNER_ASSIGNMENT_BATCH = 5;
 
 const THROTTLE_RETRY_DELAY_MS = 60_000;
 
-export interface FlowReassignmentResult {
+export interface FlowCoOwnerAssignmentResult {
   flowKey: string;
   flowName: string;
   environmentName: string;
@@ -86,25 +86,23 @@ function createOwnerPayload(
   };
 }
 
-async function reassignSingleFlow(
+async function assignSingleFlowCoOwner(
   flow: TenantFlow,
-  replacement: DirectoryUser,
-): Promise<FlowReassignmentResult> {
+  coOwner: DirectoryUser,
+): Promise<FlowCoOwnerAssignmentResult> {
   const flowKey = getFlowKey(flow);
-  const currentOwnerId = flow.owner.id;
 
-  if (flow.owner.status !== "orphaned" || !currentOwnerId) {
+  if (flow.assignedCoOwner) {
     return {
       flowKey,
       flowName: flow.displayName,
       environmentName: flow.environmentName,
       success: false,
-      error:
-        "The flow no longer has an owner confirmed as deleted. Rescan before retrying.",
+      error: "A co-owner was already assigned to this flow in this session.",
     };
   }
 
-  const payload = createOwnerPayload(replacement.id);
+  const payload = createOwnerPayload(coOwner.id);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -152,34 +150,40 @@ async function reassignSingleFlow(
     flowName: flow.displayName,
     environmentName: flow.environmentName,
     success: false,
-    error: "Adding the recovery co-owner did not complete after retrying.",
+    error: "Adding the co-owner did not complete after retrying.",
   };
 }
 
-export async function reassignFlowOwners(
+export async function assignFlowCoOwners(
   flows: TenantFlow[],
-  replacement: DirectoryUser,
+  coOwner: DirectoryUser,
   onProgress: ProgressHandler,
-): Promise<FlowReassignmentResult[]> {
+): Promise<FlowCoOwnerAssignmentResult[]> {
   if (flows.length === 0) {
-    throw new Error("Select at least one orphaned flow.");
+    throw new Error("Select at least one flow.");
   }
 
-  if (flows.length > MAX_REASSIGNMENT_BATCH) {
+  if (flows.length > MAX_COOWNER_ASSIGNMENT_BATCH) {
     throw new Error(
-      `Select no more than ${MAX_REASSIGNMENT_BATCH} flows per confirmed batch.`,
+      `Select no more than ${MAX_COOWNER_ASSIGNMENT_BATCH} flows per confirmed batch.`,
     );
   }
 
-  if (flows.some((flow) => flow.owner.status !== "orphaned")) {
+  if (flows.some((flow) => Boolean(flow.assignedCoOwner))) {
     throw new Error(
-      "Only flows whose owner is confirmed deleted can receive a recovery co-owner.",
+      "One or more selected flows already received a co-owner in this session. Clear the selection and retry.",
     );
   }
 
-  const results: FlowReassignmentResult[] = [];
+  if (flows.some((flow) => !flow.environmentId || !flow.id)) {
+    throw new Error(
+      "One or more selected flows are missing the environment or flow ID required for co-owner assignment.",
+    );
+  }
+
+  const results: FlowCoOwnerAssignmentResult[] = [];
   for (const flow of flows) {
-    results.push(await reassignSingleFlow(flow, replacement));
+    results.push(await assignSingleFlowCoOwner(flow, coOwner));
     onProgress(results.length, flows.length);
   }
 
