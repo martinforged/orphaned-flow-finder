@@ -1,5 +1,7 @@
 import { PowerPlatformforAdminsService } from "../generated/services/PowerPlatformforAdminsService";
 import type { Environment } from "../generated/models/PowerPlatformforAdminsModel";
+import { PowerAutomateManagementService } from "../generated/services/PowerAutomateManagementService";
+import type { FlowPermission } from "../generated/models/PowerAutomateManagementModel";
 import type { HttpRequest } from "../generated/models/HTTPwithMicrosoftEntraID_preauthorized_Model";
 import { dataSourcesInfo } from "../../.power/schemas/appschemas/dataSourcesInfo";
 import { getClient } from "@microsoft/power-apps/data";
@@ -13,8 +15,10 @@ const ENVIRONMENT_PAGE_SIZE = 100;
 const MAX_ENVIRONMENT_PAGES = 100;
 const FLOW_PAGE_SIZE = 1_000;
 const MAX_FLOW_PAGES = 1_000;
+const FLOW_ENRICHMENT_BATCH_SIZE = 5;
 const POWER_PLATFORM_API_VERSION = "2026-06-01";
 const INVENTORY_API_VERSION = "2024-10-01";
+const FLOW_RUN_API_VERSION = "2024-10-01";
 const ENVIRONMENT_RESOURCE_TYPE = "microsoft.powerplatform/environments";
 const CLOUD_FLOW_RESOURCE_TYPE = "microsoft.powerautomate/cloudflows";
 const INVENTORY_DATA_SOURCE = "webcontents";
@@ -37,6 +41,25 @@ export interface TenantEnvironment {
   dataverseStatus: DataverseStatus;
 }
 
+export type FlowCoOwnerLookupStatus =
+  | "complete"
+  | "unavailable"
+  | "failed";
+export type FlowLastRunStatus =
+  | "found"
+  | "never-run"
+  | "unavailable"
+  | "failed";
+
+export interface FlowCoOwner {
+  id?: string;
+  displayName: string;
+  userPrincipalName?: string;
+  mail?: string;
+  principalType?: "User" | "Group";
+  roleName: "Owner" | "CanEdit";
+}
+
 export interface TenantFlow {
   id: string;
   displayName: string;
@@ -50,10 +73,14 @@ export interface TenantFlow {
   isSolutionAware: boolean;
   ownerId?: string;
   owner: OwnerValidation;
+  additionalCoOwners: FlowCoOwner[];
+  coOwnerLookupStatus: FlowCoOwnerLookupStatus;
   assignedCoOwner?: DirectoryUser;
   createdBy?: string;
   createdTime?: string;
   lastModifiedTime?: string;
+  lastRunTime?: string;
+  lastRunStatus: FlowLastRunStatus;
 }
 
 export interface ScanIssue {
@@ -66,7 +93,8 @@ export interface ScanIssue {
 export type ScanPhase =
   | "loading-environments"
   | "loading-flows"
-  | "validating-owners";
+  | "validating-owners"
+  | "enriching-flows";
 
 export interface ScanProgress {
   phase: ScanPhase;
@@ -105,6 +133,25 @@ interface InventoryResponse {
   totalRecords: number;
   skipToken?: string;
   data: InventoryResource[];
+}
+
+interface FlowEnrichmentResult {
+  flow: TenantFlow;
+  coOwnerError?: string;
+  lastRunError?: string;
+}
+
+interface FlowEnrichmentSummary {
+  flows: TenantFlow[];
+  coOwnerFailureCount: number;
+  firstCoOwnerError?: string;
+  lastRunFailureCount: number;
+  firstLastRunError?: string;
+}
+
+interface LatestFlowRun {
+  status: "found" | "never-run";
+  lastRunTime?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -483,6 +530,313 @@ function readString(
     : undefined;
 }
 
+function unwrapHttpPayload(
+  rawResponse: unknown,
+  context: string,
+): unknown {
+  let payload = rawResponse;
+
+  if (typeof payload === "string") {
+    if (!payload.trim()) {
+      return undefined;
+    }
+    payload = parseJson(payload, context);
+  }
+
+  if (isRecord(payload) && "body" in payload) {
+    payload = payload.body;
+    if (typeof payload === "string") {
+      if (!payload.trim()) {
+        return undefined;
+      }
+      payload = parseJson(payload, context);
+    }
+  }
+
+  return payload;
+}
+
+function getFlowRunRecords(rawResponse: unknown): Record<string, unknown>[] {
+  const payload = unwrapHttpPayload(
+    rawResponse,
+    "The Power Platform flow run API",
+  );
+
+  if (payload === undefined || payload === null) {
+    return [];
+  }
+
+  const rawRuns = Array.isArray(payload)
+    ? payload
+    : isRecord(payload)
+      ? payload.value
+      : undefined;
+
+  if (!Array.isArray(rawRuns) || rawRuns.some((run) => !isRecord(run))) {
+    throw new Error(
+      "The Power Platform flow run API returned an unexpected response shape.",
+    );
+  }
+
+  return rawRuns;
+}
+
+function getFlowRunStartTime(
+  run: Record<string, unknown>,
+): string | undefined {
+  const properties = isRecord(run.properties)
+    ? run.properties
+    : undefined;
+
+  return (
+    readString(run, "startTime") ??
+    readString(run, "starttime") ??
+    readString(run, "flowRunStartedOn") ??
+    readString(run, "flowrunstartedon") ??
+    readString(properties, "startTime") ??
+    readString(properties, "starttime")
+  );
+}
+
+function mapAdditionalCoOwners(
+  permissions: FlowPermission[],
+  primaryOwnerId: string | undefined,
+): FlowCoOwner[] {
+  const normalizedPrimaryOwnerId = primaryOwnerId?.toLowerCase();
+  const coOwnersByKey = new Map<string, FlowCoOwner>();
+
+  for (const permission of permissions) {
+    const roleName = permission.properties?.roleName;
+    if (roleName !== "Owner" && roleName !== "CanEdit") {
+      continue;
+    }
+
+    const principal = permission.properties?.principal;
+    const id = principal?.id?.trim() || undefined;
+    if (id?.toLowerCase() === normalizedPrimaryOwnerId) {
+      continue;
+    }
+
+    const userPrincipalName =
+      principal?.userPrincipalName?.trim() || undefined;
+    const mail = principal?.email?.trim() || undefined;
+    const displayName =
+      principal?.displayName?.trim() ||
+      userPrincipalName ||
+      mail ||
+      id;
+    if (!displayName) {
+      continue;
+    }
+
+    const coOwner: FlowCoOwner = {
+      id,
+      displayName,
+      userPrincipalName,
+      mail,
+      principalType: principal?.type,
+      roleName,
+    };
+    const key = (
+      id ??
+      `${principal?.type ?? "Unknown"}:${userPrincipalName ?? mail ?? displayName}`
+    ).toLowerCase();
+    coOwnersByKey.set(key, coOwner);
+  }
+
+  return Array.from(coOwnersByKey.values()).sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, undefined, {
+      sensitivity: "base",
+    }),
+  );
+}
+
+async function loadAdditionalCoOwners(
+  flow: TenantFlow,
+): Promise<FlowCoOwner[]> {
+  const result = await PowerAutomateManagementService.ListFlowOwners(
+    flow.environmentId,
+    flow.id,
+  );
+
+  if (!result.success) {
+    throw createOperationError(
+      `Loading co-owners for ${flow.displayName}`,
+      result.error,
+    );
+  }
+
+  return mapAdditionalCoOwners(
+    result.data.value ?? [],
+    flow.ownerId,
+  );
+}
+
+async function loadLatestFlowRun(
+  flow: TenantFlow,
+): Promise<LatestFlowRun> {
+  const request: HttpRequest = {
+    method: "GET",
+    url:
+      `/powerautomate/environments/${encodeURIComponent(flow.environmentId)}` +
+      `/flowRuns?workflowId=${encodeURIComponent(flow.workflowEntityId ?? "")}` +
+      `&api-version=${FLOW_RUN_API_VERSION}`,
+    headers: {
+      Accept: "application/json",
+    },
+  };
+  const result = await httpClient.executeAsync<
+    { request: HttpRequest },
+    unknown
+  >(
+    {
+      connectorOperation: {
+        tableName: INVENTORY_DATA_SOURCE,
+        operationName: "InvokeHttp",
+        parameters: { request },
+      },
+    },
+  );
+
+  if (!result.success) {
+    throw createOperationError(
+      `Loading the last run for ${flow.displayName}`,
+      result.error,
+    );
+  }
+
+  const runs = getFlowRunRecords(result.data);
+  if (runs.length === 0) {
+    return { status: "never-run" };
+  }
+
+  let latestRunTime: string | undefined;
+  let latestRunTimestamp = Number.NEGATIVE_INFINITY;
+  for (const run of runs) {
+    const startTime = getFlowRunStartTime(run);
+    if (!startTime) {
+      continue;
+    }
+
+    const timestamp = new Date(startTime).getTime();
+    if (!Number.isNaN(timestamp) && timestamp > latestRunTimestamp) {
+      latestRunTimestamp = timestamp;
+      latestRunTime = startTime;
+    }
+  }
+
+  if (!latestRunTime) {
+    throw new Error(
+      `The flow run API returned run records for ${flow.displayName} without a valid start time.`,
+    );
+  }
+
+  return {
+    status: "found",
+    lastRunTime: latestRunTime,
+  };
+}
+
+async function enrichSingleFlow(
+  flow: TenantFlow,
+): Promise<FlowEnrichmentResult> {
+  const canLoadCoOwners = Boolean(flow.environmentId);
+  const canLoadLastRun =
+    Boolean(flow.environmentId && flow.workflowEntityId) &&
+    flow.dataverseStatus === "enabled";
+  const [coOwnerResult, lastRunResult] = await Promise.allSettled([
+    canLoadCoOwners
+      ? loadAdditionalCoOwners(flow)
+      : Promise.resolve<FlowCoOwner[]>([]),
+    canLoadLastRun
+      ? loadLatestFlowRun(flow)
+      : Promise.resolve<LatestFlowRun>({ status: "never-run" }),
+  ]);
+
+  const coOwnerLookupStatus: FlowCoOwnerLookupStatus = !canLoadCoOwners
+    ? "unavailable"
+    : coOwnerResult.status === "fulfilled"
+      ? "complete"
+      : "failed";
+  const lastRunStatus: FlowLastRunStatus = !canLoadLastRun
+    ? "unavailable"
+    : lastRunResult.status === "fulfilled"
+      ? lastRunResult.value.status
+      : "failed";
+
+  return {
+    flow: {
+      ...flow,
+      additionalCoOwners:
+        coOwnerResult.status === "fulfilled" ? coOwnerResult.value : [],
+      coOwnerLookupStatus,
+      lastRunTime:
+        lastRunResult.status === "fulfilled"
+          ? lastRunResult.value.lastRunTime
+          : undefined,
+      lastRunStatus,
+    },
+    coOwnerError:
+      canLoadCoOwners && coOwnerResult.status === "rejected"
+        ? getErrorMessage(coOwnerResult.reason)
+        : undefined,
+    lastRunError:
+      canLoadLastRun && lastRunResult.status === "rejected"
+        ? getErrorMessage(lastRunResult.reason)
+        : undefined,
+  };
+}
+
+async function enrichFlows(
+  flows: TenantFlow[],
+  onProgress: ProgressHandler,
+): Promise<FlowEnrichmentSummary> {
+  const enrichedFlows: TenantFlow[] = [];
+  let coOwnerFailureCount = 0;
+  let firstCoOwnerError: string | undefined;
+  let lastRunFailureCount = 0;
+  let firstLastRunError: string | undefined;
+
+  for (
+    let offset = 0;
+    offset < flows.length;
+    offset += FLOW_ENRICHMENT_BATCH_SIZE
+  ) {
+    const batch = flows.slice(
+      offset,
+      offset + FLOW_ENRICHMENT_BATCH_SIZE,
+    );
+    const batchResults = await Promise.all(batch.map(enrichSingleFlow));
+
+    for (const result of batchResults) {
+      enrichedFlows.push(result.flow);
+      if (result.coOwnerError) {
+        coOwnerFailureCount += 1;
+        firstCoOwnerError ??= result.coOwnerError;
+      }
+      if (result.lastRunError) {
+        lastRunFailureCount += 1;
+        firstLastRunError ??= result.lastRunError;
+      }
+    }
+
+    onProgress({
+      phase: "enriching-flows",
+      processedItems: enrichedFlows.length,
+      totalItems: flows.length,
+      message: "Loading additional co-owners and last flow run dates.",
+    });
+  }
+
+  return {
+    flows: enrichedFlows,
+    coOwnerFailureCount,
+    firstCoOwnerError,
+    lastRunFailureCount,
+    firstLastRunError,
+  };
+}
+
 function normalizeInventoryEnvironment(
   resource: InventoryResource,
   issues: ScanIssue[],
@@ -740,9 +1094,12 @@ function mapFlowResource(
         ? "Pending directory validation"
         : "Owner ID not reported",
     },
+    additionalCoOwners: [],
+    coOwnerLookupStatus: "unavailable",
     createdBy: readString(properties, "createdBy"),
     createdTime: readString(properties, "createdAt"),
     lastModifiedTime: readString(properties, "lastModifiedAt"),
+    lastRunStatus: "unavailable",
   };
 }
 
@@ -882,7 +1239,7 @@ export async function scanTenantFlows(
       });
     },
   );
-  const flows = unvalidatedFlows.map((flow) => ({
+  const validatedFlows = unvalidatedFlows.map((flow) => ({
     ...flow,
     owner: flow.ownerId
       ? (ownerValidations.get(flow.ownerId.toLowerCase()) ?? flow.owner)
@@ -904,12 +1261,35 @@ export async function scanTenantFlows(
     phase: "validating-owners",
     processedItems: uniqueOwnerCount,
     totalItems: uniqueOwnerCount,
-    message: "Tenant flow and owner validation completed.",
+    message: "Microsoft Entra ID owner validation completed.",
   });
+
+  onProgress({
+    phase: "enriching-flows",
+    processedItems: 0,
+    totalItems: validatedFlows.length,
+    message: "Loading additional co-owners and last flow run dates.",
+  });
+
+  const enrichment = await enrichFlows(validatedFlows, onProgress);
+  if (enrichment.coOwnerFailureCount > 0) {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Automate Management",
+      message: `${enrichment.coOwnerFailureCount.toLocaleString()} flow co-owner lookup(s) failed. Affected rows show Lookup failed instead of an incomplete owner list. ${enrichment.firstCoOwnerError ?? ""}`.trim(),
+    });
+  }
+  if (enrichment.lastRunFailureCount > 0) {
+    issues.push({
+      severity: "warning",
+      environmentName: "Power Platform flow runs",
+      message: `${enrichment.lastRunFailureCount.toLocaleString()} last-run lookup(s) failed. Affected rows show Lookup failed instead of an inaccurate date. ${enrichment.firstLastRunError ?? ""}`.trim(),
+    });
+  }
 
   return {
     environments,
-    flows,
+    flows: enrichment.flows,
     issues,
     scannedAt: new Date().toISOString(),
   };

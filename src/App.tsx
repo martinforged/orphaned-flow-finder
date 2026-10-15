@@ -11,7 +11,6 @@ import { SendCopyDialog } from "./components/SendCopyDialog";
 import type {
   DirectoryUser,
   OwnerStatus,
-  OwnerValidation,
 } from "./services/directoryUsers";
 import {
   getFlowKey,
@@ -22,6 +21,7 @@ import {
   discoverTenantEnvironments,
   scanTenantFlows,
   type DataverseStatus,
+  type FlowCoOwner,
   type ScanIssue,
   type ScanProgress,
   type TenantEnvironment,
@@ -47,7 +47,15 @@ type SortField =
   | "displayName"
   | "environmentName"
   | "ownerId"
-  | "lastModifiedTime";
+  | "lastModifiedTime"
+  | "lastRunTime";
+
+interface OwnerOption {
+  id?: string;
+  displayName: string;
+  userPrincipalName?: string;
+  mail?: string;
+}
 
 interface SortState {
   field: SortField;
@@ -180,6 +188,58 @@ function formatDate(value?: string): string {
   }).format(date);
 }
 
+function flowCoOwnerIdentity(coOwner: FlowCoOwner): string {
+  return (
+    coOwner.userPrincipalName ??
+    coOwner.mail ??
+    coOwner.id ??
+    coOwner.principalType ??
+    "Identity unavailable"
+  );
+}
+
+function flowCoOwnerCsvValue(coOwner: FlowCoOwner): string {
+  const identity = flowCoOwnerIdentity(coOwner);
+  return identity === coOwner.displayName
+    ? coOwner.displayName
+    : `${coOwner.displayName} <${identity}>`;
+}
+
+function additionalCoOwnersCsvValue(flow: TenantFlow): string {
+  const coOwners = flow.additionalCoOwners
+    .map(flowCoOwnerCsvValue)
+    .join("; ");
+
+  if (flow.coOwnerLookupStatus === "failed") {
+    return coOwners
+      ? `${coOwners}; Lookup failed - list may be incomplete`
+      : "Lookup failed";
+  }
+  if (flow.coOwnerLookupStatus === "unavailable") {
+    return coOwners || "Not available";
+  }
+  return coOwners || "None";
+}
+
+function lastRunDisplayValue(flow: TenantFlow): string {
+  if (flow.lastRunStatus === "found") {
+    return formatDate(flow.lastRunTime);
+  }
+
+  const labels = {
+    "never-run": "No runs found",
+    unavailable: "Not available",
+    failed: "Lookup failed",
+  } as const;
+  return labels[flow.lastRunStatus];
+}
+
+function lastRunCsvValue(flow: TenantFlow): string {
+  return flow.lastRunStatus === "found"
+    ? (flow.lastRunTime ?? "")
+    : lastRunDisplayValue(flow);
+}
+
 function csvValue(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
@@ -195,12 +255,17 @@ function sortFlows(
   const direction = sort.direction === "ascending" ? 1 : -1;
 
   return [...flows].sort((left, right) => {
-    if (sort.field === "lastModifiedTime") {
-      const leftTime = left.lastModifiedTime
-        ? new Date(left.lastModifiedTime).getTime()
+    if (
+      sort.field === "lastModifiedTime" ||
+      sort.field === "lastRunTime"
+    ) {
+      const leftValue = left[sort.field];
+      const rightValue = right[sort.field];
+      const leftTime = leftValue
+        ? new Date(leftValue).getTime()
         : 0;
-      const rightTime = right.lastModifiedTime
-        ? new Date(right.lastModifiedTime).getTime()
+      const rightTime = rightValue
+        ? new Date(rightValue).getTime()
         : 0;
       return (leftTime - rightTime) * direction;
     }
@@ -369,43 +434,42 @@ function App() {
       ).sort(compareText),
     [environments],
   );
-  const ownerOptions = useMemo(
-    () =>
-      Array.from(
-        new Map(
-          flows.flatMap((flow) =>
-            [
-              ...(flow.owner.id
-                ? [[flow.owner.id.toLowerCase(), flow.owner] as const]
-                : []),
-              ...(flow.assignedCoOwner
-                ? [
-                    [
-                      flow.assignedCoOwner.id.toLowerCase(),
-                      {
-                        id: flow.assignedCoOwner.id,
-                        status: "active" as const,
-                        displayName: flow.assignedCoOwner.displayName,
-                        userPrincipalName:
-                          flow.assignedCoOwner.userPrincipalName,
-                        mail: flow.assignedCoOwner.mail,
-                      },
-                    ] as const,
-                  ]
-                : []),
-            ],
-          ),
-        ).values(),
-      )
-        .filter(
-          (owner): owner is OwnerValidation & { id: string } =>
-            Boolean(owner.id),
-        )
-        .sort((left, right) =>
-          compareText(left.displayName, right.displayName),
-        ),
-    [flows],
-  );
+  const ownerOptions = useMemo(() => {
+    const optionsById = new Map<string, OwnerOption & { id: string }>();
+
+    for (const flow of flows) {
+      if (flow.owner.id) {
+        optionsById.set(flow.owner.id.toLowerCase(), {
+          id: flow.owner.id,
+          displayName: flow.owner.displayName,
+          userPrincipalName: flow.owner.userPrincipalName,
+          mail: flow.owner.mail,
+        });
+      }
+      for (const coOwner of flow.additionalCoOwners) {
+        if (coOwner.id) {
+          optionsById.set(coOwner.id.toLowerCase(), {
+            id: coOwner.id,
+            displayName: coOwner.displayName,
+            userPrincipalName: coOwner.userPrincipalName,
+            mail: coOwner.mail,
+          });
+        }
+      }
+      if (flow.assignedCoOwner) {
+        optionsById.set(flow.assignedCoOwner.id.toLowerCase(), {
+          id: flow.assignedCoOwner.id,
+          displayName: flow.assignedCoOwner.displayName,
+          userPrincipalName: flow.assignedCoOwner.userPrincipalName,
+          mail: flow.assignedCoOwner.mail,
+        });
+      }
+    }
+
+    return Array.from(optionsById.values()).sort((left, right) =>
+      compareText(left.displayName, right.displayName),
+    );
+  }, [flows]);
   const environmentFlowCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const flow of flows) {
@@ -434,6 +498,15 @@ function App() {
         flow.owner.userPrincipalName
           ?.toLowerCase()
           .includes(normalizedSearch) ||
+        flow.additionalCoOwners.some(
+          (coOwner) =>
+            coOwner.id?.toLowerCase().includes(normalizedSearch) ||
+            coOwner.displayName.toLowerCase().includes(normalizedSearch) ||
+            coOwner.userPrincipalName
+              ?.toLowerCase()
+              .includes(normalizedSearch) ||
+            coOwner.mail?.toLowerCase().includes(normalizedSearch),
+        ) ||
         flow.assignedCoOwner?.displayName
           .toLowerCase()
           .includes(normalizedSearch) ||
@@ -458,6 +531,9 @@ function App() {
       const matchesOwnerId =
         ownerIdFilter === "all" ||
         flow.owner.id?.toLowerCase() === ownerIdFilter ||
+        flow.additionalCoOwners.some(
+          (coOwner) => coOwner.id?.toLowerCase() === ownerIdFilter,
+        ) ||
         flow.assignedCoOwner?.id.toLowerCase() === ownerIdFilter;
       const matchesEnvironmentType =
         environmentTypeFilter === "all" ||
@@ -577,17 +653,21 @@ function App() {
       return scanStatus === "complete" ? 100 : 0;
     }
 
-    if (
-      progress.phase === "loading-environments" ||
-      progress.totalItems === 0
-    ) {
-      return 8;
+    if (progress.phase === "loading-environments") {
+      return 5;
     }
 
-    const ratio = progress.processedItems / progress.totalItems;
-    return progress.phase === "loading-flows"
-      ? Math.min(75, 10 + Math.round(ratio * 65))
-      : Math.min(98, 75 + Math.round(ratio * 23));
+    const ratio =
+      progress.totalItems > 0
+        ? progress.processedItems / progress.totalItems
+        : 0;
+    if (progress.phase === "loading-flows") {
+      return Math.min(55, 8 + Math.round(ratio * 47));
+    }
+    if (progress.phase === "validating-owners") {
+      return Math.min(73, 55 + Math.round(ratio * 18));
+    }
+    return Math.min(98, 73 + Math.round(ratio * 25));
   })();
 
   async function startScan() {
@@ -689,6 +769,25 @@ function App() {
           ? {
               ...flow,
               assignedCoOwner: coOwner,
+              additionalCoOwners: flow.additionalCoOwners.some(
+                (existingCoOwner) =>
+                  existingCoOwner.id?.toLowerCase() ===
+                  coOwner.id.toLowerCase(),
+              )
+                ? flow.additionalCoOwners
+                : [
+                    ...flow.additionalCoOwners,
+                    {
+                      id: coOwner.id,
+                      displayName: coOwner.displayName,
+                      userPrincipalName: coOwner.userPrincipalName,
+                      mail: coOwner.mail,
+                      principalType: "User" as const,
+                      roleName: "CanEdit" as const,
+                    },
+                  ].sort((left, right) =>
+                    compareText(left.displayName, right.displayName),
+                  ),
             }
           : flow,
       ),
@@ -736,6 +835,7 @@ function App() {
       "Owner display name",
       "Owner user principal name",
       "Owner object ID",
+      "Additional co-owners",
       "Co-owner assignment status",
       "Assigned co-owner display name",
       "Assigned co-owner user principal name",
@@ -745,6 +845,7 @@ function App() {
       "Created by object ID",
       "Created",
       "Last modified",
+      "Last flow run",
     ];
     const rows = filteredFlows.map((flow) => [
       flow.displayName,
@@ -758,6 +859,7 @@ function App() {
       flow.owner.displayName,
       flow.owner.userPrincipalName ?? "",
       flow.ownerId ?? "",
+      additionalCoOwnersCsvValue(flow),
       flow.assignedCoOwner ? "Co-owner added" : "",
       flow.assignedCoOwner?.displayName ?? "",
       flow.assignedCoOwner?.userPrincipalName ?? "",
@@ -767,6 +869,7 @@ function App() {
       flow.createdBy ?? "",
       flow.createdTime ?? "",
       flow.lastModifiedTime ?? "",
+      lastRunCsvValue(flow),
     ]);
     const csv = [header, ...rows]
       .map((row) => row.map(csvValue).join(","))
@@ -813,8 +916,10 @@ function App() {
               Choose all environments, only the Default environment, or one
               Power Platform environment before scanning. Dataverse status
               comes from the environment record, owner IDs are validated
-              against Microsoft Entra ID, and co-owner access is granted only
-              after an explicit preview and confirmation.
+              against Microsoft Entra ID, and the completed inventory includes
+              additional co-owners and the latest available flow run date.
+              Co-owner access is granted only after an explicit preview and
+              confirmation.
             </p>
           </div>
           <div className="hero-actions">
@@ -946,7 +1051,9 @@ function App() {
                     ? "Preparing tenant inventory"
                     : progress.phase === "loading-flows"
                       ? "Power Platform inventory API"
-                      : "Microsoft Entra ID directory"}
+                      : progress.phase === "validating-owners"
+                        ? "Microsoft Entra ID directory"
+                        : "Flow permissions and run history"}
                 </span>
               </div>
               <span>{progressPercent}%</span>
@@ -960,7 +1067,9 @@ function App() {
                 {progress.totalItems.toLocaleString()}{" "}
                 {progress.phase === "validating-owners"
                   ? "unique owners validated"
-                  : "cloud flows loaded"}
+                  : progress.phase === "enriching-flows"
+                    ? "cloud flows enriched"
+                    : "cloud flows loaded"}
               </div>
             ) : null}
           </section>
@@ -1106,7 +1215,7 @@ function App() {
                   setSearchText(event.target.value);
                   setPage(1);
                 }}
-                placeholder="Flow, owner ID, or environment"
+                placeholder="Flow, owner, co-owner, or environment"
               />
             </label>
             <label>
@@ -1501,6 +1610,16 @@ function App() {
                       <span>{sortLabel("lastModifiedTime")}</span>
                     </button>
                   </th>
+                  <th>Additional co-owners</th>
+                  <th aria-sort={ariaSort("lastRunTime")}>
+                    <button
+                      type="button"
+                      onClick={() => updateSort("lastRunTime")}
+                    >
+                      Last flow run
+                      <span>{sortLabel("lastRunTime")}</span>
+                    </button>
+                  </th>
                   <th>Flow ID</th>
                 </tr>
               </thead>
@@ -1587,6 +1706,51 @@ function App() {
                       )}
                     </td>
                     <td>{formatDate(flow.lastModifiedTime)}</td>
+                    <td>
+                      {flow.additionalCoOwners.length > 0 ? (
+                        <div className="co-owner-list">
+                          {flow.additionalCoOwners.map((coOwner, index) => (
+                            <div
+                              key={
+                                coOwner.id ??
+                                `${flowCoOwnerIdentity(coOwner)}:${index}`
+                              }
+                              title={`${coOwner.displayName} - ${flowCoOwnerIdentity(coOwner)}`}
+                            >
+                              <strong>{coOwner.displayName}</strong>
+                              <small>{flowCoOwnerIdentity(coOwner)}</small>
+                            </div>
+                          ))}
+                          {flow.coOwnerLookupStatus === "failed" ? (
+                            <span className="lookup-status lookup-failed">
+                              List may be incomplete
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span
+                          className={`lookup-status lookup-${flow.coOwnerLookupStatus}`}
+                        >
+                          {flow.coOwnerLookupStatus === "complete"
+                            ? "None"
+                            : flow.coOwnerLookupStatus === "failed"
+                              ? "Lookup failed"
+                              : "Not available"}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <span
+                        className={`lookup-status lookup-${flow.lastRunStatus}`}
+                        title={
+                          flow.lastRunStatus === "unavailable"
+                            ? "Run history is unavailable when the environment has no confirmed Dataverse database or the flow has no workflow entity ID."
+                            : undefined
+                        }
+                      >
+                        {lastRunDisplayValue(flow)}
+                      </span>
+                    </td>
                     <td>
                       <code>{flow.id}</code>
                     </td>

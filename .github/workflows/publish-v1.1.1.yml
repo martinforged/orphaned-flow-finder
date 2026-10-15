@@ -1,0 +1,41 @@
+name: Publish v1.1.1 release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.1.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view v1.1.1 >/dev/null 2>&1; then
+            gh release edit v1.1.1 \
+              --title "Orphaned Flow Finder v1.1.1" \
+              --notes-file RELEASE-NOTES-v1.1.1.md
+          else
+            gh release create v1.1.1 \
+              --title "Orphaned Flow Finder v1.1.1" \
+              --notes-file RELEASE-NOTES-v1.1.1.md
+          fi
+
+          gh release upload v1.1.1 \
+            solutions/OrphanedFlowFinder_1_1_1_0_managed.zip \
+            solutions/OrphanedFlowFinder_1_1_1_0_unmanaged.zip \
+            solutions/SHA256SUMS.txt \
+            "Orphaned Flow Finder - Deployment and Tenant Onboarding Guide.docx" \
+            --clobber

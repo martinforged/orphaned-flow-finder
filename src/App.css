@@ -692,6 +692,7 @@ button.metric-card[aria-pressed="true"] {
 
 table {
   width: 100%;
+  min-width: 1350px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -729,23 +730,31 @@ th:nth-child(1) {
 }
 
 th:nth-child(2) {
-  width: 23%;
-}
-
-th:nth-child(3) {
   width: 18%;
 }
 
+th:nth-child(3) {
+  width: 14%;
+}
+
 th:nth-child(4) {
-  width: 25%;
+  width: 18%;
 }
 
 th:nth-child(5) {
-  width: 15%;
+  width: 11%;
 }
 
 th:nth-child(6) {
-  width: 15%;
+  width: 19%;
+}
+
+th:nth-child(7) {
+  width: 10%;
+}
+
+th:nth-child(8) {
+  width: 6%;
 }
 
 th button {
@@ -893,6 +902,50 @@ td code {
 .owner-cell small {
   color: #7d889b;
   font-size: 9px;
+}
+
+.co-owner-list {
+  display: grid;
+  gap: 7px;
+}
+
+.co-owner-list > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.co-owner-list strong,
+.co-owner-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-owner-list strong {
+  color: #263550;
+  font-size: 11px;
+}
+
+.co-owner-list small {
+  color: #7d889b;
+  font-size: 9px;
+}
+
+.lookup-status {
+  color: #59667c;
+  font-size: 10px;
+}
+
+.lookup-failed {
+  color: #9a2936;
+  font-weight: 750;
+}
+
+.lookup-unavailable,
+.lookup-never-run,
+.lookup-complete {
+  color: #7d889b;
 }
 
 .owner-status {
@@ -1589,7 +1642,7 @@ footer span:first-child {
   }
 
   table {
-    min-width: 1100px;
+    min-width: 1350px;
   }
 }
 

@@ -25,7 +25,7 @@ repository. Sections 3 and 4 are for maintainers who build a new release and
 can be skipped by a target-tenant installer.
 
 1. Download
-   `solutions/OrphanedFlowFinder_1_1_0_0_managed.zip`.
+   `solutions/OrphanedFlowFinder_1_1_1_0_managed.zip`.
 2. Confirm the file hash against `solutions/SHA256SUMS.txt`.
 3. Complete the target prerequisites in section 5.
 4. Create the four target connections in section 6.
@@ -48,19 +48,21 @@ The app:
 3. Applies a selected environment to the Power Platform Inventory query.
 4. Validates unique owner object IDs against Microsoft Entra ID.
 5. Classifies owner records as Active, Disabled, Deleted, Missing, or Unknown.
-6. Identifies Dataverse database status and solution-aware flows when the
+6. Lists additional flow co-owners from current owner permissions.
+7. Loads the latest available flow run start time for supported flows.
+8. Identifies Dataverse database status and solution-aware flows when the
    platform returns that metadata.
-7. Filters, sorts, pages, and exports the inventory.
-8. Adds an active Microsoft Entra user as a co-owner to explicitly selected
+9. Filters, sorts, pages, and exports the inventory.
+10. Adds an active Microsoft Entra user as a co-owner to explicitly selected
    flows after preview and confirmation.
-9. Opens a single selected non-solution flow in the GCC Power Automate maker
+11. Opens a single selected non-solution flow in the GCC Power Automate maker
    portal so an existing owner or co-owner can use the supported **Send a
    copy** panel.
 
-Tenant scanning and directory validation are read-only. The only write operation
-adds a co-owner after the operator reviews the affected flows and
-selects an explicit confirmation check box. The Send a copy handoff performs
-no write in this app.
+Tenant scanning, owner-permission inventory, flow run lookup, and directory
+validation are read-only. The only write operation adds a co-owner after the
+operator reviews the affected flows and selects an explicit confirmation check
+box. The Send a copy handoff performs no write in this app.
 
 ## 2. Connector architecture
 
@@ -69,9 +71,9 @@ The app requires four connectors.
 | Connector | Connector ID | Purpose | Connection behavior |
 | --- | --- | --- | --- |
 | Power Platform for Admins | `shared_powerplatformforadmins` | Lists environments and expands Dataverse metadata | Per-user/nonshareable |
-| HTTP with Microsoft Entra ID (preauthorized) | `shared_webcontents` | Queries GCC environment and cloud flow inventory | Shareable connection |
+| HTTP with Microsoft Entra ID (preauthorized) | `shared_webcontents` | Queries GCC environment/flow inventory and supported flow run history | Shareable connection |
 | Office 365 Users | `shared_office365users` | Validates owner IDs and searches active co-owners | Per-user/nonshareable |
-| Power Automate Management | `shared_flowmanagement` | Adds a confirmed flow co-owner as admin | Per-user/nonshareable |
+| Power Automate Management | `shared_flowmanagement` | Reads owner permissions and adds a confirmed flow co-owner as admin | Per-user/nonshareable |
 
 ### GCC Power Platform API connection
 
@@ -256,8 +258,8 @@ Distribute:
 
 The repository's official release artifacts are:
 
-- `solutions/OrphanedFlowFinder_1_1_0_0_managed.zip`
-- `solutions/OrphanedFlowFinder_1_1_0_0_unmanaged.zip`
+- `solutions/OrphanedFlowFinder_1_1_1_0_managed.zip`
+- `solutions/OrphanedFlowFinder_1_1_1_0_unmanaged.zip`
 - `solutions/SHA256SUMS.txt`
 
 ## 5. Target tenant prerequisites
@@ -334,7 +336,7 @@ the exact GCC endpoint, and administrator permissions.
 2. Select the target environment.
 3. Open **Solutions**.
 4. Select **Import solution**.
-5. Upload `OrphanedFlowFinder_1_1_0_0_managed.zip` for the standard
+5. Upload `OrphanedFlowFinder_1_1_1_0_managed.zip` for the standard
    installation, or the unmanaged ZIP only when the target team will own
    future development.
 6. Review the package details and dependencies.
@@ -400,6 +402,8 @@ Complete this checklist before production use.
   modified date, and Default-only filters work.
 - Active filter chips can be removed.
 - **Clear all** resets the inventory.
+- The result table and CSV include additional co-owners and the latest
+  available flow run time.
 - CSV export contains only the filtered rows.
 
 ### Co-owner assignment safety
@@ -468,6 +472,7 @@ Administrator permissions. The operator must already hold the required role.
 
 - Treat tenant flow names, owner IDs, and environment inventory as
   administrative data.
+- Treat co-owner identities and flow run timestamps as administrative data.
 - Limit app access to authorized governance personnel.
 - Review DLP policy before enabling the HTTP connector.
 - Use a dedicated admin or service account for shared connections where policy
@@ -489,6 +494,9 @@ Administrator permissions. The operator must already hold the required role.
 | HTTP connector returns authorization errors | Wrong resource URI/base URL, DLP block, or missing Premium entitlement | For GCC, set both fields to `https://api.gov.powerplatform.microsoft.us`; review DLP and licensing |
 | `AADSTS7000301` from Power Platform for Admins V2 | Cross-cloud certificate issue in the V2 connector path | This app must use the preauthorized HTTP connector; don't bind it to Power Platform for Admins V2 |
 | Directory owners show Unknown | Office 365 Users lookup failed or was throttled | Repair the Office 365 Users connection and scan again |
+| Additional co-owners show Lookup failed | Power Automate Management couldn't read that flow's owner permissions | Review **Scan notes and exceptions**, repair the Power Automate Management connection, verify admin access, and scan again |
+| Last flow run shows Not available | The environment has no confirmed Dataverse database or the flow has no `workflowEntityId` | Expected for unsupported rows; use the flow details experience if run history is required |
+| Last flow run shows Lookup failed | The supported Power Platform flow-runs request failed or returned an unreadable response | Review **Scan notes and exceptions**, verify the GCC HTTP connection, and scan again |
 | Inventory is empty or stale | Role doesn't include tenant inventory access, wrong API endpoint, or inventory propagation delay | Verify role/endpoint and wait at least 15 minutes |
 | Dataverse environment is missing | One environment-discovery source failed or inventory hasn't propagated | Review **Scan notes and exceptions**, verify both admin connections, wait 15 minutes, and scan again; flow-referenced environments are added with an ID-based fallback |
 | A non-Dataverse environment shows Dataverse | An older build inferred environment state from flow-level `workflowEntityId` | Upgrade to the current build and scan again; only expanded linked-environment metadata now determines the badge |

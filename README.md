@@ -12,18 +12,19 @@ operations guidance, see [DEPLOYMENT-GUIDE.md](./DEPLOYMENT-GUIDE.md).
 Ready-to-import Power Platform solution packages are available in
 [solutions/](./solutions/):
 
-- [Managed solution](./solutions/OrphanedFlowFinder_1_1_0_0_managed.zip) -
+- [Managed solution](./solutions/OrphanedFlowFinder_1_1_1_0_managed.zip) -
   recommended for production, UAT, and most tenant installations.
-- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_0_0_unmanaged.zip) -
+- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_1_0_unmanaged.zip) -
   intended only for organizations taking ownership of future development.
 
 The packages contain the Code App and four solution connection references.
 Target-tenant connections must be created and mapped during or after import.
 See the deployment guide before installing.
 
-## Current release: v1.1.0
+## Current release: v1.1.1
 
-Version 1.1.0 includes tenant scoping, corrected Dataverse classification,
+Version 1.1.1 adds scanned co-owner inventory and the latest available flow run
+date while retaining tenant scoping, authoritative Dataverse classification,
 Microsoft Entra ID validation, and guarded flow recovery:
 
 - Merges the Power Platform for Admins environment list with
@@ -38,8 +39,8 @@ Microsoft Entra ID validation, and guarded flow recovery:
   query so only that environment's cloud flows and owners are processed.
 - Deduplicates owner IDs and classifies them as Active, Disabled, Deleted, Missing, or Unknown through **Office 365 Users**.
 - Displays environment, Dataverse database status, solution-aware status, flow
-  ID, owner identity/status, creator object ID, creation time, and last modified
-  time.
+  ID, owner identity/status, additional co-owners, creator object ID, creation
+  time, last modified time, and the latest available flow run time.
 - Filters by free-text search, environment, owner status, specific owner,
   environment type, region, Dataverse database status, modified-date window,
   and Default environment.
@@ -57,18 +58,19 @@ Microsoft Entra ID validation, and guarded flow recovery:
   The action opens that flow in the GCC Power Automate maker portal, where an
   existing owner or co-owner completes the supported Send a copy panel.
 
-Tenant scanning and directory validation are read-only. The only write path is
-the explicitly confirmed action that adds a valid co-owner. The guided Send a
-copy action changes no permissions or flow data in this app.
+Tenant scanning, permission inventory, run-history lookup, and directory
+validation are read-only. The only write path is the explicitly confirmed
+action that adds a valid co-owner. The guided Send a copy action changes no
+permissions or flow data in this app.
 
 ## Required permissions and connections
 
 Use a Power Platform administrator or Dynamics 365 administrator account. The app uses these standard connectors:
 
 1. **Power Platform for Admins** - lists tenant environments, expands Dataverse metadata, and identifies databases when available.
-2. **HTTP with Microsoft Entra ID (preauthorized)** - queries tenant-wide environment and cloud flow inventory from the GCC Power Platform API. Configure both the Base Resource URL and Microsoft Entra ID Resource URI as `https://api.gov.powerplatform.microsoft.us`.
+2. **HTTP with Microsoft Entra ID (preauthorized)** - queries tenant-wide environment and cloud flow inventory plus supported flow run history from the GCC Power Platform API. Configure both the Base Resource URL and Microsoft Entra ID Resource URI as `https://api.gov.powerplatform.microsoft.us`.
 3. **Office 365 Users** - validates owner object IDs and searches active co-owner candidates.
-4. **Power Automate Management** - uses **Modify Flow Owners as Admin** only after preview and confirmation.
+4. **Power Automate Management** - reads current flow owner permissions during a scan and uses **Modify Flow Owners as Admin** only after preview and confirmation.
 
 All connector calls use delegated permissions. **Power Platform for Admins** is
 a per-user connection, while the preauthorized HTTP connection can be shared.
@@ -118,6 +120,15 @@ npx pa app push --solution-id <TARGET-SOLUTION-ID>
   **Database unknown** rather than guessing.
 - Environment and flow inventory paging are followed with continuation tokens and guarded against repeated or unbounded tokens.
 - Cloud flows are queried from the `PowerPlatformResources` inventory table by resource type, avoiding hundreds of per-environment management calls.
+- After the base inventory loads, owner permissions and supported run history
+  are enriched in bounded batches of five flows to limit connector pressure.
+- The additional co-owner list includes `Owner` and `CanEdit` permissions other
+  than the primary owner reported by inventory. A failed permission lookup is
+  shown as **Lookup failed** and never as an empty co-owner list.
+- Last flow run uses the latest valid run start time returned by the Power
+  Platform flow-runs API. The API requires a confirmed Dataverse database and a
+  flow `workflowEntityId`; other rows show **Not available**, and a supported
+  lookup that fails shows **Lookup failed**.
 - Power Platform inventory can take up to 15 minutes to reflect newly created, changed, or deleted resources.
 - Deleted or deleting environments are reported and skipped because they don't contain active flow inventory.
 - A failed directory lookup remains **Unknown** and is never treated as proof that a user was deleted.
