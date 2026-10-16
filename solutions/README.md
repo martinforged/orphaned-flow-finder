@@ -4,7 +4,7 @@
 
 Use:
 
-`OrphanedFlowFinder_1_1_1_0_managed.zip`
+`OrphanedFlowFinder_1_1_2_0_managed.zip`
 
 This is the recommended package for production, UAT, and normal tenant
 installations. Import it through **Power Apps > Solutions > Import solution**.
@@ -13,7 +13,7 @@ installations. Import it through **Power Apps > Solutions > Import solution**.
 
 Use:
 
-`OrphanedFlowFinder_1_1_1_0_unmanaged.zip`
+`OrphanedFlowFinder_1_1_2_0_unmanaged.zip`
 
 Only use the unmanaged package when the target organization intentionally
 takes ownership of customizations and future development.
@@ -24,19 +24,21 @@ Each package contains:
 
 - Orphaned Flow Finder Code App
 - Power Platform for Admins connection reference
-- HTTP with Microsoft Entra ID (preauthorized) connection reference
+- HTTP with Microsoft Entra ID (preauthorized) inventory connection reference
+- HTTP with Microsoft Entra ID (preauthorized) Flow admin connection reference
 - Office 365 Users connection reference
+- Power Automate for Admins connection reference
 - Power Automate Management connection reference
 
-The current packages use solution version **1.1.1.0** and include the pre-scan
-environment scope selector, authoritative Dataverse/No Dataverse badges,
-scanned additional co-owners, latest available flow run dates, co-owner
-assignment, and guided Send a copy workflow.
+The current packages use solution version **1.1.2.0** and include a fast base
+scan, page-scoped co-owner names and last-run dates, authoritative
+Dataverse/No Dataverse badges, co-owner assignment, and guided Send a copy
+workflow.
 
-The `1.0.0.0` and `1.1.0.0` ZIPs are retained for historical comparison. New
-installations and updates should use `1.1.1.0`.
+Earlier ZIPs are retained for historical comparison. New installations and
+updates should use `1.1.2.0`.
 
-Connections aren't transported between tenants. Create the four target
+Connections aren't transported between tenants. Create the six target
 connections and map the imported connection references as described in
 [the deployment guide](../DEPLOYMENT-GUIDE.md).
 

@@ -25,11 +25,11 @@ repository. Sections 3 and 4 are for maintainers who build a new release and
 can be skipped by a target-tenant installer.
 
 1. Download
-   `solutions/OrphanedFlowFinder_1_1_1_0_managed.zip`.
+   `solutions/OrphanedFlowFinder_1_1_2_0_managed.zip`.
 2. Confirm the file hash against `solutions/SHA256SUMS.txt`.
 3. Complete the target prerequisites in section 5.
-4. Create the four target connections in section 6.
-5. Import the managed ZIP and map the four connection references as described
+4. Create the six target connections in section 6.
+5. Import the managed ZIP and map the six connection references as described
    in section 7.
 6. Complete first-run consent and the acceptance test in sections 8 and 9.
 7. Share Run access only with approved administrators.
@@ -48,8 +48,9 @@ The app:
 3. Applies a selected environment to the Power Platform Inventory query.
 4. Validates unique owner object IDs against Microsoft Entra ID.
 5. Classifies owner records as Active, Disabled, Deleted, Missing, or Unknown.
-6. Lists additional flow co-owners from current owner permissions.
-7. Loads the latest available flow run start time for supported flows.
+6. Loads additional flow co-owners for the current result page and resolves
+   user object IDs to names through Microsoft Entra ID.
+7. Loads the latest available flow run start time for the current result page.
 8. Identifies Dataverse database status and solution-aware flows when the
    platform returns that metadata.
 9. Filters, sorts, pages, and exports the inventory.
@@ -66,26 +67,27 @@ box. The Send a copy handoff performs no write in this app.
 
 ## 2. Connector architecture
 
-The app requires four connectors.
+The app requires six connection references across five connectors.
 
 | Connector | Connector ID | Purpose | Connection behavior |
 | --- | --- | --- | --- |
 | Power Platform for Admins | `shared_powerplatformforadmins` | Lists environments and expands Dataverse metadata | Per-user/nonshareable |
-| HTTP with Microsoft Entra ID (preauthorized) | `shared_webcontents` | Queries GCC environment/flow inventory and supported flow run history | Shareable connection |
-| Office 365 Users | `shared_office365users` | Validates owner IDs and searches active co-owners | Per-user/nonshareable |
-| Power Automate Management | `shared_flowmanagement` | Reads owner permissions and adds a confirmed flow co-owner as admin | Per-user/nonshareable |
+| HTTP with Microsoft Entra ID (preauthorized) - Inventory API | `shared_webcontents` | Queries GCC environment and cloud flow inventory | Shareable connection |
+| HTTP with Microsoft Entra ID (preauthorized) - Flow Admin API | `shared_webcontents` | Reads the latest run through the GCC Flow admin API | Shareable connection |
+| Office 365 Users | `shared_office365users` | Validates owner IDs, resolves co-owner names, and searches recovery users | Per-user/nonshareable |
+| Power Automate for Admins | `shared_microsoftflowforadmins` | Reads flow owner permissions for the current page | Per-user/nonshareable |
+| Power Automate Management | `shared_flowmanagement` | Adds a confirmed flow co-owner as admin | Per-user/nonshareable |
 
-### GCC Power Platform API connection
+### GCC HTTP connection endpoints
 
-For the HTTP with Microsoft Entra ID (preauthorized) connection, configure both
-fields with this exact GCC value:
+Create two separate HTTP with Microsoft Entra ID (preauthorized) connections:
 
-| Field | GCC value |
-| --- | --- |
-| Base Resource URL | `https://api.gov.powerplatform.microsoft.us` |
-| Microsoft Entra ID Resource URI | `https://api.gov.powerplatform.microsoft.us` |
+| Connection | Base Resource URL | Microsoft Entra ID Resource URI |
+| --- | --- | --- |
+| Inventory API | `https://api.gov.powerplatform.microsoft.us` | `https://api.gov.powerplatform.microsoft.us` |
+| Flow Admin API | `https://gov.api.flow.microsoft.us` | `https://gov.service.flow.microsoft.us/` |
 
-Do not use this GCC endpoint in another cloud.
+Do not interchange the endpoints or use these GCC values in another cloud.
 
 ## 3. Publisher preparation before exporting
 
@@ -102,7 +104,7 @@ source-environment connection IDs. The Code App must use connection references
 that are solution components. The target import can then map each reference to
 a target-tenant connection.
 
-Do not distribute an export until the solution contains all four connection
+Do not distribute an export until the solution contains all six connection
 references and the Code App has been republished against them.
 
 ### 3.1 Prerequisites in the source environment
@@ -113,12 +115,12 @@ Confirm:
 - Code Apps are enabled.
 - The Code App is in the **Oprhaned Flow Finder** solution.
 - The app builds successfully.
-- All four source connections are in Connected status.
+- All six source connections are in Connected status.
 - The operator has edit access to the solution and Code App.
 - Node.js 22 or later is installed.
 - The project dependencies have been restored with `npm install`.
 
-### 3.2 Create four connection references
+### 3.2 Create six connection references
 
 In the source maker portal:
 
@@ -132,7 +134,9 @@ In the source maker portal:
 | --- | --- | --- |
 | Orphaned Flow Finder - Power Platform Admins | Power Platform for Admins | A connected admin connection |
 | Orphaned Flow Finder - Inventory API | HTTP with Microsoft Entra ID (preauthorized) | The connection configured with the GCC API URL |
+| Orphaned Flow Finder - Flow Admin API | HTTP with Microsoft Entra ID (preauthorized) | The connection configured with the GCC Flow admin URL and resource URI |
 | Orphaned Flow Finder - Directory Users | Office 365 Users | A connected directory connection |
+| Orphaned Flow Finder - Power Automate Admins | Power Automate for Admins | A connected admin connection |
 | Orphaned Flow Finder - Flow Management | Power Automate Management | A connected admin connection |
 
 The solution publisher creates the logical names. Record the exact logical name
@@ -152,7 +156,7 @@ npx pa connection list-references `
   --solution-id <SOURCE-SOLUTION-ID>
 ```
 
-The output must list four references. If it reports
+The output must list six references. If it reports
 `No connection references found`, stop and complete section 3.2.
 
 ### 3.4 Rebind each Code App data source
@@ -171,8 +175,18 @@ npx pa app remove data-source `
   --force
 
 npx pa app remove data-source `
+  --connector shared_webcontents `
+  --name webcontents_1 `
+  --force
+
+npx pa app remove data-source `
   --connector shared_office365users `
   --name office365users `
+  --force
+
+npx pa app remove data-source `
+  --connector shared_microsoftflowforadmins `
+  --name microsoftflowforadmins `
   --force
 
 npx pa app remove data-source `
@@ -195,8 +209,18 @@ npx pa app add data-source `
   --solution-id <SOURCE-SOLUTION-ID>
 
 npx pa app add data-source `
+  --connector shared_webcontents `
+  --connection-ref <FLOW-ADMIN-API-LOGICAL-NAME> `
+  --solution-id <SOURCE-SOLUTION-ID>
+
+npx pa app add data-source `
   --connector shared_office365users `
   --connection-ref <DIRECTORY-USERS-LOGICAL-NAME> `
+  --solution-id <SOURCE-SOLUTION-ID>
+
+npx pa app add data-source `
+  --connector shared_microsoftflowforadmins `
+  --connection-ref <POWER-AUTOMATE-ADMINS-LOGICAL-NAME> `
   --solution-id <SOURCE-SOLUTION-ID>
 
 npx pa app add data-source `
@@ -219,7 +243,7 @@ npx pa app push --solution-id <SOURCE-SOLUTION-ID>
 Open the solution and verify that it contains:
 
 - The Orphaned Flow Finder Code App
-- Four connection references
+- Six connection references
 
 Run one source-environment scan after republishing. Do not export until the
 scan works with the reference-based bindings.
@@ -258,8 +282,8 @@ Distribute:
 
 The repository's official release artifacts are:
 
-- `solutions/OrphanedFlowFinder_1_1_1_0_managed.zip`
-- `solutions/OrphanedFlowFinder_1_1_1_0_unmanaged.zip`
+- `solutions/OrphanedFlowFinder_1_1_2_0_managed.zip`
+- `solutions/OrphanedFlowFinder_1_1_2_0_unmanaged.zip`
 - `solutions/SHA256SUMS.txt`
 
 ## 5. Target tenant prerequisites
@@ -269,7 +293,7 @@ The target environment must have:
 - Microsoft Dataverse
 - Code Apps enabled
 - Power Platform Inventory available
-- All four required connectors allowed by Data Loss Prevention policy
+- All six required connection references allowed by Data Loss Prevention policy
 - An appropriate Power Apps license for every operator
 - Premium connector entitlement for HTTP with Microsoft Entra ID
   (preauthorized)
@@ -305,7 +329,7 @@ authorized target-tenant administrator.
 5. Create **Power Platform for Admins**.
 6. Confirm the connection shows **Connected**.
 
-### 6.2 HTTP with Microsoft Entra ID (preauthorized)
+### 6.2 Inventory API - HTTP with Microsoft Entra ID (preauthorized)
 
 1. Create **HTTP with Microsoft Entra ID (preauthorized)**.
 2. Select **Log in with Microsoft Entra ID**.
@@ -317,13 +341,34 @@ authorized target-tenant administrator.
 This is a Premium connector. If creation fails, confirm licensing, DLP policy,
 the exact GCC endpoint, and administrator permissions.
 
-### 6.3 Office 365 Users
+### 6.3 Flow Admin API - HTTP with Microsoft Entra ID (preauthorized)
+
+1. Create another **HTTP with Microsoft Entra ID (preauthorized)** connection.
+2. Select **Log in with Microsoft Entra ID**.
+3. Set **Base Resource URL** to:
+   `https://gov.api.flow.microsoft.us`
+4. Set **Microsoft Entra ID Resource URI** to:
+   `https://gov.service.flow.microsoft.us/`
+5. Complete sign-in.
+6. Confirm the connection shows **Connected**.
+
+This connection is separate from the Inventory API connection. The app uses it
+only for page-scoped, read-only last-run lookups.
+
+### 6.4 Office 365 Users
 
 1. Create **Office 365 Users**.
 2. Sign in with the target-tenant administrator.
 3. Confirm the connection shows **Connected**.
 
-### 6.4 Power Automate Management
+### 6.5 Power Automate for Admins
+
+1. Create **Power Automate for Admins**.
+2. Use Microsoft Entra ID Integrated authentication.
+3. Sign in with the target-tenant administrator.
+4. Confirm the connection shows **Connected**.
+
+### 6.6 Power Automate Management
 
 1. Create **Power Automate Management**.
 2. Use Microsoft Entra ID Integrated authentication.
@@ -336,14 +381,14 @@ the exact GCC endpoint, and administrator permissions.
 2. Select the target environment.
 3. Open **Solutions**.
 4. Select **Import solution**.
-5. Upload `OrphanedFlowFinder_1_1_1_0_managed.zip` for the standard
+5. Upload `OrphanedFlowFinder_1_1_2_0_managed.zip` for the standard
    installation, or the unmanaged ZIP only when the target team will own
    future development.
 6. Review the package details and dependencies.
 7. Map each connection reference to the matching target connection.
 8. Complete the import.
 9. Wait for the import to report Success.
-10. Open the imported solution and verify the Code App and four connection
+10. Open the imported solution and verify the Code App and six connection
     references are present.
 
 If the import wizard doesn't request a connection mapping:
@@ -359,7 +404,7 @@ Never point a target reference to a source-tenant connection ID.
 
 1. Open Orphaned Flow Finder from the target solution.
 2. When Power Apps displays **Allow this app to access your data**, verify all
-   four connectors.
+   six connection references.
 3. Select **Allow**.
 4. Wait for the pre-scan environment list to load.
 5. Choose one scan scope:
@@ -394,6 +439,9 @@ Complete this checklist before production use.
 - Cloud flows are returned.
 - Owner IDs are deduplicated and validated.
 - Active, Disabled, Deleted, Missing, and Unknown statuses behave as expected.
+- The base scan completes without waiting for per-flow detail calls.
+- **Load page details** resolves user co-owner names and returns the latest run
+  or **No runs found** for the current page.
 
 ### Filters and export
 
@@ -489,14 +537,16 @@ Administrator permissions. The operator must already hold the required role.
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
 | Imported app has no usable connections | Solution was exported without connection references | Complete section 3 in the source, republish, and export again |
-| `No connection references found` | References weren't created as solution components | Create all four references in the source solution |
+| `No connection references found` | References weren't created as solution components | Create all six references in the source solution |
 | App opens but scan returns 401/403 | Wrong connection, expired connection, or missing admin role | Repair the connection and verify the operator's role |
-| HTTP connector returns authorization errors | Wrong resource URI/base URL, DLP block, or missing Premium entitlement | For GCC, set both fields to `https://api.gov.powerplatform.microsoft.us`; review DLP and licensing |
-| `AADSTS7000301` from Power Platform for Admins V2 | Cross-cloud certificate issue in the V2 connector path | This app must use the preauthorized HTTP connector; don't bind it to Power Platform for Admins V2 |
+| Inventory HTTP connector returns authorization errors | Wrong resource URI/base URL, DLP block, or missing Premium entitlement | Set both Inventory API fields to `https://api.gov.powerplatform.microsoft.us`; review DLP and licensing |
+| Flow Admin HTTP connector returns authorization errors | The Flow API base URL or resource URI is wrong | Use base `https://gov.api.flow.microsoft.us` and resource `https://gov.service.flow.microsoft.us/`, then repair consent |
+| `AADSTS7000301` from Power Platform for Admins V2 | The unsupported V2 connector was added to an older build | Upgrade to v1.1.2 or later; the app must use the Flow-scoped preauthorized HTTP connection instead |
 | Directory owners show Unknown | Office 365 Users lookup failed or was throttled | Repair the Office 365 Users connection and scan again |
-| Additional co-owners show Lookup failed | Power Automate Management couldn't read that flow's owner permissions | Review **Scan notes and exceptions**, repair the Power Automate Management connection, verify admin access, and scan again |
-| Last flow run shows Not available | The environment has no confirmed Dataverse database or the flow has no `workflowEntityId` | Expected for unsupported rows; use the flow details experience if run history is required |
-| Last flow run shows Lookup failed | The supported Power Platform flow-runs request failed or returned an unreadable response | Review **Scan notes and exceptions**, verify the GCC HTTP connection, and scan again |
+| Additional co-owners show Lookup failed | Power Automate for Admins couldn't read flow permissions | Repair that connection, verify admin access, and retry **Load page details** |
+| Additional co-owners show GUIDs | Office 365 Users couldn't resolve those user IDs, or the principal is a group | Review scan notes; users resolve to names/UPNs while groups remain labeled as groups |
+| Last flow run shows Not loaded | Page details haven't been requested | Select **Load page details** above the result table |
+| Last flow run shows Lookup failed | The Flow admin request failed or returned an unreadable response | Review scan notes and repair the Flow Admin API HTTP connection |
 | Inventory is empty or stale | Role doesn't include tenant inventory access, wrong API endpoint, or inventory propagation delay | Verify role/endpoint and wait at least 15 minutes |
 | Dataverse environment is missing | One environment-discovery source failed or inventory hasn't propagated | Review **Scan notes and exceptions**, verify both admin connections, wait 15 minutes, and scan again; flow-referenced environments are added with an ID-based fallback |
 | A non-Dataverse environment shows Dataverse | An older build inferred environment state from flow-level `workflowEntityId` | Upgrade to the current build and scan again; only expanded linked-environment metadata now determines the badge |
@@ -542,7 +592,7 @@ records are environment resources and can be used by other apps or flows.
 
 ### Source publisher
 
-- [ ] Four solution connection references exist
+- [ ] Six solution connection references exist
 - [ ] Code App data sources use the references
 - [ ] Lint and build pass
 - [ ] Code App is republished into the source solution
@@ -556,9 +606,9 @@ records are environment resources and can be used by other apps or flows.
 - [ ] Target environment has Dataverse and Code Apps enabled
 - [ ] Operator has the required administrator role
 - [ ] Licensing and DLP prerequisites are satisfied
-- [ ] Four target connections are Connected
+- [ ] Six target connections are Connected
 - [ ] Solution import succeeds
-- [ ] Four references map to target connections
+- [ ] Six references map to target connections
 - [ ] App first-run consent is completed
 - [ ] Inventory scan succeeds
 - [ ] Filters and CSV export are validated

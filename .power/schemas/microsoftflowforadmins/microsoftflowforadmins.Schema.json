@@ -1,0 +1,726 @@
+{
+  "name": "shared_microsoftflowforadmins",
+  "id": "/providers/Microsoft.PowerApps/apis/shared_microsoftflowforadmins",
+  "type": "Microsoft.PowerApps/apis",
+  "properties": {
+    "displayName": "Power Automate for Admins",
+    "iconUri": "https://connectorsiconsfairfax.z5.web.core.usgovcloudapi.net/v1.0.1778/1.0.1778.4417/microsoftflowforadmins/icon.png",
+    "iconBrandColor": "#0066ff",
+    "apiEnvironment": "Shared",
+    "isCustomApi": false,
+    "blobUrisAreProxied": false,
+    "connectionParameterSets": {
+      "uiDefinition": {
+        "displayName": "Authentication Type",
+        "description": "Type of authentication to be used."
+      },
+      "values": [
+        {
+          "name": "firstParty",
+          "uiDefinition": {
+            "displayName": "Microsoft Entra ID Integrated",
+            "description": "Use Microsoft Entra ID to access this service."
+          },
+          "parameters": {
+            "token": {
+              "type": "oauthSetting",
+              "oAuthSettings": {
+                "identityProvider": "aadcertificate",
+                "clientId": "1da95c7d-4756-40ab-95b9-f6223c6aaf73",
+                "scopes": [],
+                "redirectMode": "GlobalPerConnector",
+                "redirectUrl": "https://global.consent.azure-apihub.us/redirect/microsoftflowforadmins",
+                "properties": {
+                  "IsFirstParty": "True",
+                  "AzureActiveDirectoryResourceId": "https://gov.service.flow.microsoft.us/",
+                  "IsOnbehalfofLoginSupported": true
+                },
+                "customParameters": {
+                  "ResourceUri": {
+                    "value": "https://gov.service.flow.microsoft.us/"
+                  },
+                  "loginUri": {
+                    "value": "https://login.microsoftonline.com"
+                  },
+                  "LoginUriAAD": {
+                    "value": "https://login.microsoftonline.com"
+                  }
+                }
+              }
+            }
+          },
+          "metadata": {
+            "allowSharing": false
+          }
+        },
+        {
+          "name": "CertOauth",
+          "uiDefinition": {
+            "displayName": "Client Certificate Auth",
+            "description": "Provide Microsoft Entra ID credentials using PFX certificate and password"
+          },
+          "parameters": {
+            "token": {
+              "type": "oauthSetting",
+              "oAuthSettings": {
+                "identityProvider": "aadcertificate",
+                "clientId": "1da95c7d-4756-40ab-95b9-f6223c6aaf73",
+                "scopes": [],
+                "redirectMode": "GlobalPerConnector",
+                "redirectUrl": "https://global.consent.azure-apihub.us/redirect/microsoftflowforadmins",
+                "properties": {
+                  "IsFirstParty": "True",
+                  "AzureActiveDirectoryResourceId": "https://gov.service.flow.microsoft.us/",
+                  "IsOnbehalfofLoginSupported": true
+                },
+                "customParameters": {
+                  "grantType": {
+                    "value": "client_credentials"
+                  },
+                  "ResourceUri": {
+                    "value": "https://gov.service.flow.microsoft.us/"
+                  }
+                }
+              },
+              "uiDefinition": {
+                "displayName": "Login your Credentials",
+                "description": "Login your Credentials",
+                "tooltip": "Provide your Credentials",
+                "constraints": {
+                  "required": "true",
+                  "hidden": "false"
+                }
+              }
+            },
+            "token:TenantId": {
+              "type": "string",
+              "uiDefinition": {
+                "schema": {
+                  "description": "The tenant ID of the Microsoft Entra ID application",
+                  "type": "string"
+                },
+                "displayName": "Tenant",
+                "constraints": {
+                  "required": "true",
+                  "hidden": "false"
+                }
+              }
+            },
+            "token:clientId": {
+              "type": "string",
+              "uiDefinition": {
+                "displayName": "Client ID",
+                "description": "The client ID of for the Microsoft Entra ID application",
+                "constraints": {
+                  "required": "true",
+                  "hidden": "false"
+                }
+              }
+            },
+            "token:clientCertificateSecret": {
+              "type": "clientCertificate",
+              "uiDefinition": {
+                "displayName": "Client certificate secret",
+                "description": "The client certificate secret allowed by this application",
+                "constraints": {
+                  "required": "true",
+                  "hidden": "false"
+                }
+              }
+            }
+          },
+          "metadata": {
+            "allowSharing": false
+          }
+        }
+      ]
+    },
+    "connectionParameters": {
+      "token": {
+        "type": "oauthSetting",
+        "oAuthSettings": {
+          "identityProvider": "aadcertificate",
+          "clientId": "1da95c7d-4756-40ab-95b9-f6223c6aaf73",
+          "scopes": [],
+          "redirectMode": "GlobalPerConnector",
+          "redirectUrl": "https://global.consent.azure-apihub.us/redirect/microsoftflowforadmins",
+          "properties": {
+            "IsFirstParty": "True",
+            "AzureActiveDirectoryResourceId": "https://gov.service.flow.microsoft.us/",
+            "IsOnbehalfofLoginSupported": true
+          },
+          "customParameters": {
+            "ResourceUri": {
+              "value": "https://gov.service.flow.microsoft.us/"
+            },
+            "loginUri": {
+              "value": "https://login.microsoftonline.com"
+            },
+            "LoginUriAAD": {
+              "value": "https://login.microsoftonline.com"
+            }
+          }
+        }
+      }
+    },
+    "swagger": {
+      "swagger": "2.0",
+      "info": {
+        "version": "1.0.0",
+        "title": "Power Automate for Admins",
+        "description": "Power Automate Management Connector for Administrators. Service Principal authentication is not supported for administrative actions involving user details.",
+        "x-ms-api-annotation": {
+          "status": "Production"
+        },
+        "contact": {
+          "name": "Microsoft"
+        }
+      },
+      "host": "power-apis-usgov001-public.azure-apihub.us",
+      "basePath": "/apim/microsoftflowforadmins",
+      "schemes": [
+        "https"
+      ],
+      "consumes": [],
+      "produces": [
+        "application/json"
+      ],
+      "paths": {
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment}/flows/{flow}": {
+          "delete": {
+            "responses": {
+              "200": {
+                "description": "No Content"
+              }
+            },
+            "summary": "Remove Flow as Admin",
+            "description": "Deletes a Flow.",
+            "operationId": "Remove-AdminFlow",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "environment",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the Environment.",
+                "x-ms-summary": "Environment Name"
+              },
+              {
+                "name": "flow",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the flow.",
+                "x-ms-summary": "Flow Name"
+              },
+              {
+                "name": "api-version",
+                "in": "query",
+                "required": false,
+                "type": "string",
+                "default": "2016-11-01",
+                "description": "The date value of the API version.",
+                "x-ms-summary": "Field API Version"
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#remove-flow-as-admin"
+            }
+          }
+        },
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment}/flows/{flow}/start": {
+          "post": {
+            "responses": {
+              "200": {
+                "description": "No Content"
+              }
+            },
+            "summary": "Enable Flow as Admin",
+            "description": "Enables a Flow.",
+            "operationId": "Enable-AdminFlow",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "environment",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Environment Name.",
+                "x-ms-summary": "Name field of the Environment"
+              },
+              {
+                "name": "flow",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the flow.",
+                "x-ms-summary": "Flow Name"
+              },
+              {
+                "name": "api-version",
+                "in": "query",
+                "required": false,
+                "type": "string",
+                "default": "2016-11-01",
+                "description": "The date value of the API version.",
+                "x-ms-summary": "Field API Version"
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#enable-flow-as-admin"
+            }
+          }
+        },
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment}/flows/{flow}/stop": {
+          "post": {
+            "responses": {
+              "200": {
+                "description": "No Content"
+              }
+            },
+            "summary": "Disable Flow as Admin",
+            "description": "Disables a Flow.",
+            "operationId": "Disable-AdminFlow",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "environment",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "x-ms-summary": "Environment Name",
+                "description": "Name field of the Environment."
+              },
+              {
+                "name": "flow",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the Flow.",
+                "x-ms-summary": "Flow Name"
+              },
+              {
+                "name": "api-version",
+                "in": "query",
+                "required": false,
+                "type": "string",
+                "default": "2016-11-01",
+                "description": "The date value of the API version.",
+                "x-ms-summary": "Field API Version"
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#disable-flow-as-admin"
+            }
+          }
+        },
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment}/flows/{flow}/modifyPermissions": {
+          "post": {
+            "responses": {
+              "200": {
+                "description": "No Content"
+              }
+            },
+            "summary": "Edit Flow Owner Role as Admin",
+            "description": "Sets permissions for a Flow.",
+            "operationId": "Edit-AdminFlowOwnerRole",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "environment",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the Environment.",
+                "x-ms-summary": "Environment Name"
+              },
+              {
+                "name": "flow",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the flow.",
+                "x-ms-summary": "Flow Name"
+              },
+              {
+                "name": "api-version",
+                "in": "query",
+                "required": false,
+                "type": "string",
+                "default": "2016-11-01",
+                "description": "The date value of the API version.",
+                "x-ms-summary": "Field API Version"
+              },
+              {
+                "name": "Content-Type",
+                "in": "header",
+                "required": false,
+                "type": "string",
+                "default": "application/json",
+                "description": "Name Field of the Content-Type.",
+                "x-ms-summary": "Field Content-Type"
+              },
+              {
+                "name": "body",
+                "in": "body",
+                "required": false,
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delete": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Flow permission ID."
+                          }
+                        }
+                      },
+                      "description": "delete"
+                    },
+                    "put": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "properties": {
+                            "type": "object",
+                            "properties": {
+                              "principal": {
+                                "type": "object",
+                                "properties": {
+                                  "email": {
+                                    "type": "string",
+                                    "description": "Flow permission principal email."
+                                  },
+                                  "displayName": {
+                                    "type": "string",
+                                    "description": "Flow permission principal displayName."
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "description": "Flow permission principal object ID."
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "description": "Flow permission principal type."
+                                  }
+                                },
+                                "description": "Flow permission principal object."
+                              },
+                              "roleName": {
+                                "type": "string",
+                                "description": "Flow permission property roleName."
+                              }
+                            },
+                            "description": "Flow permission properties object."
+                          }
+                        }
+                      },
+                      "description": "Flow permission put array schema."
+                    }
+                  }
+                }
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#edit-flow-owner-role-as-admin"
+            }
+          }
+        },
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment}/flows/{flow}/permissions": {
+          "get": {
+            "responses": {
+              "200": {
+                "description": "default",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "Flow permission name field."
+                          },
+                          "id": {
+                            "type": "string",
+                            "description": "Flow permission ID field."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "Flow permission type field."
+                          },
+                          "properties": {
+                            "type": "object",
+                            "properties": {
+                              "roleName": {
+                                "type": "string",
+                                "description": "Flow permission property roleName."
+                              },
+                              "permissionType": {
+                                "type": "string",
+                                "description": "Flow permission property permission type."
+                              },
+                              "principal": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "description": "Flow permission principal object ID."
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "description": "Flow permission principal type."
+                                  }
+                                },
+                                "description": "Flow permission principal object."
+                              }
+                            },
+                            "description": "Flow permission properties object."
+                          }
+                        }
+                      },
+                      "description": "Flow permission value object array."
+                    }
+                  }
+                }
+              }
+            },
+            "summary": "Get Flow Owner Role as Admin",
+            "description": "Returns permissions for a Flow.",
+            "operationId": "Get-AdminFlowOwnerRole",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "environment",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "x-ms-summary": "Environment Name",
+                "description": "Name field of the Environment."
+              },
+              {
+                "name": "flow",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Name field of the flow.",
+                "x-ms-summary": "Flow Name"
+              },
+              {
+                "name": "api-version",
+                "in": "query",
+                "required": false,
+                "type": "string",
+                "default": "2016-11-01",
+                "description": "The date value of the API version.",
+                "x-ms-summary": "Field API Version"
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#get-flow-owner-role-as-admin"
+            }
+          }
+        },
+        "/{connectionId}/providers/Microsoft.ProcessSimple/scopes/admin/users/{userId}": {
+          "get": {
+            "responses": {
+              "200": {
+                "description": "default",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenantId": {
+                      "type": "string",
+                      "description": "Flow user tenantId.",
+                      "title": "Tenant ID"
+                    },
+                    "puid": {
+                      "type": "string",
+                      "description": "Flow user puid.",
+                      "title": "PUID"
+                    },
+                    "objectId": {
+                      "type": "string",
+                      "description": "Flow user principal object ID.",
+                      "title": "Object ID"
+                    },
+                    "isDisallowedForInternalPlans": {
+                      "type": "boolean",
+                      "description": "Flow user isDisallowedForInternalPlans.",
+                      "title": "Is Disallowed for Internal Plans"
+                    },
+                    "consentTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Flow user consentTime.",
+                      "title": "Consent Time"
+                    },
+                    "serviceSettingsSelectionTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Flow user serviceSettingsSelectionTime.",
+                      "title": "Service Settings Selection Time"
+                    },
+                    "consentBusinessAppPlatformTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "The Flow user's consentBusinessAppPlatformTime.",
+                      "title": "Consent Business App Platform Time"
+                    }
+                  }
+                }
+              }
+            },
+            "summary": "Get Flow User Details",
+            "description": "Returns the details of a specified user in the scope of Power Automate.",
+            "operationId": "Get-AdminFlowUserDetails",
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "userId",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Flow user principal object ID.",
+                "x-ms-summary": "Field userId"
+              }
+            ],
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#get-flow-user-details"
+            }
+          },
+          "delete": {
+            "responses": {
+              "200": {
+                "description": "No Content"
+              }
+            },
+            "parameters": [
+              {
+                "name": "connectionId",
+                "in": "path",
+                "required": true,
+                "x-ms-visibility": "internal",
+                "type": "string"
+              },
+              {
+                "name": "userId",
+                "in": "path",
+                "required": true,
+                "type": "string",
+                "description": "Flow user principal object ID.",
+                "x-ms-summary": "Field UserId"
+              }
+            ],
+            "summary": "Remove Flow User Details",
+            "description": "Deletes a Power Automate user details record.",
+            "operationId": "Remove-AdminFlowUserDetails",
+            "externalDocs": {
+              "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins/#remove-flow-user-details"
+            }
+          }
+        }
+      },
+      "definitions": {},
+      "parameters": {},
+      "responses": {},
+      "securityDefinitions": {
+        "OAuth": {
+          "type": "oauth2",
+          "authorizationUrl": "https://login.windows.net/common/oauth2/authorize",
+          "tokenUrl": "https://your.token.url/here",
+          "flow": "accessCode",
+          "scopes": {}
+        }
+      },
+      "security": [
+        {
+          "OAuth": []
+        }
+      ],
+      "tags": [],
+      "x-ms-connector-metadata": [
+        {
+          "propertyName": "Website",
+          "propertyValue": "https://admin.powerplatform.microsoft.com/"
+        }
+      ],
+      "externalDocs": {
+        "url": "https://docs.microsoft.com/connectors/microsoftflowforadmins"
+      }
+    },
+    "runtimeUrls": [
+      "https://power-apis-usgov001-public.azure-apihub.us/apim/microsoftflowforadmins"
+    ],
+    "primaryRuntimeUrl": "https://power-apis-usgov001-public.azure-apihub.us/apim/microsoftflowforadmins",
+    "doNotUseApiHubNetRuntimeUrl": "https://power-apis-usgov001-public.azure-apihub.us/apim/microsoftflowforadmins",
+    "metadata": {
+      "source": "marketplace",
+      "brandColor": "#0066ff",
+      "useNewApimVersion": "true",
+      "version": {
+        "previous": "v1.0.1759\\1.0.1759.4267",
+        "current": "v1.0.1778\\1.0.1778.4417"
+      }
+    },
+    "capabilities": [
+      "actions"
+    ],
+    "interfaces": {},
+    "description": "Power Automate Management Connector for Administrators. Service Principal authentication is not supported for administrative actions involving user details.",
+    "createdTime": "2019-09-09T16:56:41.6274895Z",
+    "changedTime": "2025-11-06T17:53:17.0676247Z",
+    "releaseTag": "Production",
+    "tier": "Standard",
+    "publisher": "Microsoft",
+    "scopes": {
+      "will": [],
+      "wont": []
+    },
+    "rateLimit": 0,
+    "apiVersion": "None"
+  }
+}

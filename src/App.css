@@ -631,6 +631,36 @@ button.metric-card[aria-pressed="true"] {
   background: #fff2f3;
 }
 
+.detail-load-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 28px;
+  border-bottom: 1px solid #dce6ed;
+  background: #f5f9fb;
+}
+
+.detail-load-bar > div {
+  display: grid;
+  gap: 3px;
+}
+
+.detail-load-bar strong {
+  color: #263550;
+  font-size: 12px;
+}
+
+.detail-load-bar span {
+  color: #68768b;
+  font-size: 10px;
+}
+
+.detail-load-bar .secondary-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .filter-bar input,
 .filter-bar select {
   width: 100%;
@@ -944,6 +974,7 @@ td code {
 
 .lookup-unavailable,
 .lookup-never-run,
+.lookup-not-loaded,
 .lookup-complete {
   color: #7d889b;
 }
@@ -1698,6 +1729,16 @@ footer span:first-child {
 
   .filter-summary > div {
     justify-content: flex-start;
+  }
+
+  .detail-load-bar {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 14px 20px;
+  }
+
+  .detail-load-bar .secondary-button {
+    width: 100%;
   }
 
   .selection-bar {

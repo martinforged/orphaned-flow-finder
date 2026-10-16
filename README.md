@@ -12,20 +12,19 @@ operations guidance, see [DEPLOYMENT-GUIDE.md](./DEPLOYMENT-GUIDE.md).
 Ready-to-import Power Platform solution packages are available in
 [solutions/](./solutions/):
 
-- [Managed solution](./solutions/OrphanedFlowFinder_1_1_1_0_managed.zip) -
+- [Managed solution](./solutions/OrphanedFlowFinder_1_1_2_0_managed.zip) -
   recommended for production, UAT, and most tenant installations.
-- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_1_0_unmanaged.zip) -
+- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_2_0_unmanaged.zip) -
   intended only for organizations taking ownership of future development.
 
-The packages contain the Code App and four solution connection references.
+The packages contain the Code App and six solution connection references.
 Target-tenant connections must be created and mapped during or after import.
 See the deployment guide before installing.
 
-## Current release: v1.1.1
+## Current release: v1.1.2
 
-Version 1.1.1 adds scanned co-owner inventory and the latest available flow run
-date while retaining tenant scoping, authoritative Dataverse classification,
-Microsoft Entra ID validation, and guarded flow recovery:
+Version 1.1.2 fixes the v1.1.1 GCC lookup paths and separates the fast base
+inventory from page-scoped extended details:
 
 - Merges the Power Platform for Admins environment list with
   `microsoft.powerplatform/environments` inventory records so Dataverse-backed
@@ -39,8 +38,11 @@ Microsoft Entra ID validation, and guarded flow recovery:
   query so only that environment's cloud flows and owners are processed.
 - Deduplicates owner IDs and classifies them as Active, Disabled, Deleted, Missing, or Unknown through **Office 365 Users**.
 - Displays environment, Dataverse database status, solution-aware status, flow
-  ID, owner identity/status, additional co-owners, creator object ID, creation
-  time, last modified time, and the latest available flow run time.
+  ID, owner identity/status, creator object ID, creation time, and last
+  modified time during the base scan.
+- Loads additional co-owner names and the latest flow run for at most the 50
+  flows on the current page when the administrator selects **Load page
+  details**.
 - Filters by free-text search, environment, owner status, specific owner,
   environment type, region, Dataverse database status, modified-date window,
   and Default environment.
@@ -65,21 +67,35 @@ permissions or flow data in this app.
 
 ## Required permissions and connections
 
-Use a Power Platform administrator or Dynamics 365 administrator account. The app uses these standard connectors:
+Use a Power Platform administrator or Dynamics 365 administrator account. The
+app uses six connection references across five standard connectors:
 
 1. **Power Platform for Admins** - lists tenant environments, expands Dataverse metadata, and identifies databases when available.
-2. **HTTP with Microsoft Entra ID (preauthorized)** - queries tenant-wide environment and cloud flow inventory plus supported flow run history from the GCC Power Platform API. Configure both the Base Resource URL and Microsoft Entra ID Resource URI as `https://api.gov.powerplatform.microsoft.us`.
-3. **Office 365 Users** - validates owner object IDs and searches active co-owner candidates.
-4. **Power Automate Management** - reads current flow owner permissions during a scan and uses **Modify Flow Owners as Admin** only after preview and confirmation.
+2. **HTTP with Microsoft Entra ID (preauthorized) - Inventory API** - queries
+   tenant-wide environment and cloud flow inventory. Configure both fields as
+   `https://api.gov.powerplatform.microsoft.us`.
+3. **HTTP with Microsoft Entra ID (preauthorized) - Flow Admin API** - reads
+   the latest run through the GCC Power Automate admin API. Configure the base
+   URL as `https://gov.api.flow.microsoft.us` and resource URI as
+   `https://gov.service.flow.microsoft.us/`.
+4. **Office 365 Users** - validates primary owners, resolves co-owner names,
+   and searches active co-owner candidates.
+5. **Power Automate for Admins** - reads owner and co-owner permissions for
+   flows on the current page.
+6. **Power Automate Management** - uses **Modify Flow Owners as Admin** only
+   after preview and confirmation.
 
 All connector calls use delegated permissions. **Power Platform for Admins** is
-a per-user connection, while the preauthorized HTTP connection can be shared.
-Power Apps can prompt each administrator to confirm the app's connection access
-before the first scan.
+a per-user connection, while the preauthorized HTTP connections can be shared.
+Power Apps can prompt each administrator to confirm the app's connection
+access before the first scan.
 
 ### GCC implementation note
 
-The app calls the inventory API through the preauthorized HTTP connector because the **Power Platform for Admins V2** connector returned `AADSTS7000301` for its on-behalf-of token in GCC (the connector certificate was issued from a different cloud instance). The Code App has no runtime dependency on that V2 connector.
+The app doesn't use **Power Platform for Admins V2**. That connector returns
+`AADSTS7000301` in GCC because its on-behalf-of certificate was issued from a
+different cloud instance. Inventory uses the GCC Power Platform API connection;
+last-run lookup uses a separate GCC Flow-scoped HTTP connection.
 
 ## Local development
 
@@ -120,15 +136,18 @@ npx pa app push --solution-id <TARGET-SOLUTION-ID>
   **Database unknown** rather than guessing.
 - Environment and flow inventory paging are followed with continuation tokens and guarded against repeated or unbounded tokens.
 - Cloud flows are queried from the `PowerPlatformResources` inventory table by resource type, avoiding hundreds of per-environment management calls.
-- After the base inventory loads, owner permissions and supported run history
-  are enriched in bounded batches of five flows to limit connector pressure.
+- The base inventory doesn't make per-flow permission or run-history calls.
+  This keeps tenant-wide scans fast even when they contain thousands of flows.
+- **Load page details** enriches at most the 50 flows on the current page in
+  batches of five. Authorization failures stop further calls of that type for
+  the page instead of repeating a known failure.
 - The additional co-owner list includes `Owner` and `CanEdit` permissions other
-  than the primary owner reported by inventory. A failed permission lookup is
-  shown as **Lookup failed** and never as an empty co-owner list.
-- Last flow run uses the latest valid run start time returned by the Power
-  Platform flow-runs API. The API requires a confirmed Dataverse database and a
-  flow `workflowEntityId`; other rows show **Not available**, and a supported
-  lookup that fails shows **Lookup failed**.
+  than the primary owner reported by inventory. User GUIDs are batch-resolved
+  through Office 365 Users so the table shows names and UPNs; groups remain
+  explicitly labeled as groups.
+- Last flow run uses the latest valid `properties.startTime` returned by the
+  GCC Flow admin API with `$top=1`. A flow with no retained run history shows
+  **No runs found**.
 - Power Platform inventory can take up to 15 minutes to reflect newly created, changed, or deleted resources.
 - Deleted or deleting environments are reported and skipped because they don't contain active flow inventory.
 - A failed directory lookup remains **Unknown** and is never treated as proof that a user was deleted.

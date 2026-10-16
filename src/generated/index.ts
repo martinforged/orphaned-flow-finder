@@ -5,12 +5,16 @@
 
 // Models
 export * as HTTPwithMicrosoftEntraID_preauthorized_Model from './models/HTTPwithMicrosoftEntraID_preauthorized_Model';
+export * as HTTPwithMicrosoftEntraID_preauthorized__1Model from './models/HTTPwithMicrosoftEntraID_preauthorized__1Model';
 export * as Office365UsersModel from './models/Office365UsersModel';
 export * as PowerAutomateManagementModel from './models/PowerAutomateManagementModel';
+export * as PowerAutomateforAdminsModel from './models/PowerAutomateforAdminsModel';
 export * as PowerPlatformforAdminsModel from './models/PowerPlatformforAdminsModel';
 
 // Services
 export * from './services/HTTPwithMicrosoftEntraID_preauthorized_Service';
+export * from './services/HTTPwithMicrosoftEntraID_preauthorized__1Service';
 export * from './services/Office365UsersService';
 export * from './services/PowerAutomateManagementService';
+export * from './services/PowerAutomateforAdminsService';
 export * from './services/PowerPlatformforAdminsService';

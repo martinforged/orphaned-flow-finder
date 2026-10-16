@@ -19,6 +19,7 @@ import {
 } from "./services/flowOwnership";
 import {
   discoverTenantEnvironments,
+  enrichTenantFlowDetails,
   scanTenantFlows,
   type DataverseStatus,
   type FlowCoOwner,
@@ -218,6 +219,9 @@ function additionalCoOwnersCsvValue(flow: TenantFlow): string {
   if (flow.coOwnerLookupStatus === "unavailable") {
     return coOwners || "Not available";
   }
+  if (flow.coOwnerLookupStatus === "not-loaded") {
+    return coOwners || "Not loaded";
+  }
   return coOwners || "None";
 }
 
@@ -227,6 +231,7 @@ function lastRunDisplayValue(flow: TenantFlow): string {
   }
 
   const labels = {
+    "not-loaded": "Not loaded",
     "never-run": "No runs found",
     unavailable: "Not available",
     failed: "Lookup failed",
@@ -300,6 +305,9 @@ function App() {
   const [flows, setFlows] = useState<TenantFlow[]>([]);
   const [issues, setIssues] = useState<ScanIssue[]>([]);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [detailProgress, setDetailProgress] =
+    useState<ScanProgress | null>(null);
   const [scannedAt, setScannedAt] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [environmentFilter, setEnvironmentFilter] = useState("all");
@@ -595,6 +603,13 @@ function App() {
     currentPage * PAGE_SIZE,
     filteredFlows.length,
   );
+  const pageDetailTargetCount = visibleFlows.filter(
+    (flow) =>
+      flow.coOwnerLookupStatus === "not-loaded" ||
+      flow.coOwnerLookupStatus === "failed" ||
+      flow.lastRunStatus === "not-loaded" ||
+      flow.lastRunStatus === "failed",
+  ).length;
 
   const distinctOwners = new Set(
     flows.flatMap((flow) => (flow.ownerId ? [flow.ownerId] : [])),
@@ -680,6 +695,8 @@ function App() {
 
     setScanStatus("scanning");
     setScanError(null);
+    setIsLoadingDetails(false);
+    setDetailProgress(null);
     setIssues([]);
     clearAllFilters();
     setPage(1);
@@ -701,6 +718,61 @@ function App() {
     } catch (error) {
       setScanError(errorMessage(error));
       setScanStatus("error");
+    }
+  }
+
+  async function loadVisibleFlowDetails() {
+    const targetFlows = visibleFlows.filter(
+      (flow) =>
+        flow.coOwnerLookupStatus === "not-loaded" ||
+        flow.coOwnerLookupStatus === "failed" ||
+        flow.lastRunStatus === "not-loaded" ||
+        flow.lastRunStatus === "failed",
+    );
+    if (targetFlows.length === 0 || isLoadingDetails) {
+      return;
+    }
+
+    setIsLoadingDetails(true);
+    setDetailProgress({
+      phase: "enriching-flows",
+      processedItems: 0,
+      totalItems: targetFlows.length,
+      message: "Loading details for the current flow page.",
+    });
+
+    try {
+      const result = await enrichTenantFlowDetails(
+        targetFlows,
+        setDetailProgress,
+      );
+      const enrichedByKey = new Map(
+        result.flows.map((flow) => [getFlowKey(flow), flow]),
+      );
+      setFlows((current) =>
+        current.map(
+          (flow) => enrichedByKey.get(getFlowKey(flow)) ?? flow,
+        ),
+      );
+      setIssues((current) => [
+        ...current.filter(
+          (issue) =>
+            issue.environmentName !== "Power Automate for Admins" &&
+            issue.environmentName !== "GCC Flow admin API",
+        ),
+        ...result.issues,
+      ]);
+    } catch (error) {
+      setIssues((current) => [
+        ...current,
+        {
+          severity: "error",
+          environmentName: "Flow page details",
+          message: errorMessage(error),
+        },
+      ]);
+    } finally {
+      setIsLoadingDetails(false);
     }
   }
 
@@ -916,10 +988,10 @@ function App() {
               Choose all environments, only the Default environment, or one
               Power Platform environment before scanning. Dataverse status
               comes from the environment record, owner IDs are validated
-              against Microsoft Entra ID, and the completed inventory includes
-              additional co-owners and the latest available flow run date.
-              Co-owner access is granted only after an explicit preview and
-              confirmation.
+              against Microsoft Entra ID, and additional co-owners plus the
+              latest available flow run date can be loaded for the current
+              result page. Co-owner access is granted only after an explicit
+              preview and confirmation.
             </p>
           </div>
           <div className="hero-actions">
@@ -1506,6 +1578,31 @@ function App() {
             </div>
           ) : null}
 
+          {scanStatus === "complete" && visibleFlows.length > 0 ? (
+            <div className="detail-load-bar">
+              <div>
+                <strong>Extended flow details</strong>
+                <span>
+                  Load additional co-owners and supported run history for the
+                  {` ${visibleFlows.length.toLocaleString()} flow${visibleFlows.length === 1 ? "" : "s"}`}{" "}
+                  on this page.
+                </span>
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isLoadingDetails || pageDetailTargetCount === 0}
+                onClick={() => void loadVisibleFlowDetails()}
+              >
+                {isLoadingDetails
+                  ? `Loading ${detailProgress?.processedItems ?? 0}/${detailProgress?.totalItems ?? pageDetailTargetCount}`
+                  : pageDetailTargetCount > 0
+                    ? `Load page details (${pageDetailTargetCount})`
+                    : "Page details loaded"}
+              </button>
+            </div>
+          ) : null}
+
           {selectedFlowKeys.size > 0 ? (
             <div className="selection-bar">
               <div>
@@ -1725,6 +1822,10 @@ function App() {
                             <span className="lookup-status lookup-failed">
                               List may be incomplete
                             </span>
+                          ) : flow.coOwnerLookupStatus === "not-loaded" ? (
+                            <span className="lookup-status lookup-not-loaded">
+                              Other co-owners not loaded
+                            </span>
                           ) : null}
                         </div>
                       ) : (
@@ -1735,6 +1836,8 @@ function App() {
                             ? "None"
                             : flow.coOwnerLookupStatus === "failed"
                               ? "Lookup failed"
+                              : flow.coOwnerLookupStatus === "not-loaded"
+                                ? "Not loaded"
                               : "Not available"}
                         </span>
                       )}
@@ -1744,7 +1847,9 @@ function App() {
                         className={`lookup-status lookup-${flow.lastRunStatus}`}
                         title={
                           flow.lastRunStatus === "unavailable"
-                            ? "Run history is unavailable when the environment has no confirmed Dataverse database or the flow has no workflow entity ID."
+                            ? "Run history is unavailable because required flow identifiers or Flow API authorization aren't available."
+                            : flow.lastRunStatus === "not-loaded"
+                              ? "Select Load page details to retrieve supported run history for this row."
                             : undefined
                         }
                       >
