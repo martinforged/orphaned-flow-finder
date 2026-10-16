@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import "./App.css";
 import { CoOwnerAssignmentDialog } from "./components/CoOwnerAssignmentDialog";
 import { SendCopyDialog } from "./components/SendCopyDialog";
@@ -30,7 +31,9 @@ import {
   type TenantFlow,
 } from "./services/tenantFlowInventory";
 
-const PAGE_SIZE = 50;
+const DETAIL_QUEUE_BATCH_SIZE = 5;
+const DETAIL_QUEUE_INTERVAL_MS = 3_500;
+const VIRTUAL_ROW_ESTIMATE_PX = 108;
 
 type ScanStatus = "idle" | "scanning" | "complete" | "error";
 type EnvironmentOptionsStatus = "loading" | "ready" | "error";
@@ -282,6 +285,32 @@ function sortFlows(
   });
 }
 
+function needsFlowDetails(
+  flow: TenantFlow,
+  includeFailed = false,
+): boolean {
+  return (
+    flow.coOwnerLookupStatus === "not-loaded" ||
+    flow.lastRunStatus === "not-loaded" ||
+    (includeFailed &&
+      (flow.coOwnerLookupStatus === "failed" ||
+        flow.lastRunStatus === "failed"))
+  );
+}
+
+function flowDetailsAttempted(flow: TenantFlow): boolean {
+  return (
+    flow.coOwnerLookupStatus !== "not-loaded" &&
+    flow.lastRunStatus !== "not-loaded"
+  );
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, milliseconds);
+  });
+}
+
 function App() {
   const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -308,6 +337,8 @@ function App() {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [detailProgress, setDetailProgress] =
     useState<ScanProgress | null>(null);
+  const [detailQueueCount, setDetailQueueCount] = useState(0);
+  const [isLoadingAllDetails, setIsLoadingAllDetails] = useState(false);
   const [scannedAt, setScannedAt] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [environmentFilter, setEnvironmentFilter] = useState("all");
@@ -333,8 +364,13 @@ function App() {
     field: "lastModifiedTime",
     direction: "descending",
   });
-  const [page, setPage] = useState(1);
   const inventoryPanelRef = useRef<HTMLElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const flowsRef = useRef<TenantFlow[]>([]);
+  const detailQueueRef = useRef<string[]>([]);
+  const queuedDetailKeysRef = useRef(new Set<string>());
+  const detailWorkerRunningRef = useRef(false);
+  const detailWorkerGenerationRef = useRef(0);
 
   const defaultScanEnvironment = useMemo(
     () =>
@@ -416,6 +452,10 @@ function App() {
       isCurrent = false;
     };
   }, [applyEnvironmentOptions, applyEnvironmentOptionsError]);
+
+  useEffect(() => {
+    flowsRef.current = flows;
+  }, [flows]);
 
   const refreshEnvironmentOptions = useCallback(async () => {
     setEnvironmentOptionsStatus("loading");
@@ -588,27 +628,28 @@ function App() {
     sort,
   ]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredFlows.length / PAGE_SIZE),
+  const rowVirtualizer = useVirtualizer({
+    count: filteredFlows.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => VIRTUAL_ROW_ESTIMATE_PX,
+    getItemKey: (index) => getFlowKey(filteredFlows[index]),
+    overscan: 8,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const visibleFlows = virtualRows.map(
+    (virtualRow) => filteredFlows[virtualRow.index],
   );
-  const currentPage = Math.min(page, totalPages);
-  const visibleFlows = filteredFlows.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
-  );
-  const firstVisibleFlow =
-    filteredFlows.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
-  const lastVisibleFlow = Math.min(
-    currentPage * PAGE_SIZE,
-    filteredFlows.length,
-  );
-  const pageDetailTargetCount = visibleFlows.filter(
-    (flow) =>
-      flow.coOwnerLookupStatus === "not-loaded" ||
-      flow.coOwnerLookupStatus === "failed" ||
-      flow.lastRunStatus === "not-loaded" ||
-      flow.lastRunStatus === "failed",
+  const visibleFlowKeySignature = visibleFlows
+    .map(getFlowKey)
+    .join("|");
+  const remainingDetailCount = filteredFlows.filter((flow) =>
+    needsFlowDetails(flow),
+  ).length;
+  const failedDetailCount = filteredFlows.filter((flow) =>
+    needsFlowDetails(flow, true),
+  ).length - remainingDetailCount;
+  const attemptedDetailCount = filteredFlows.filter(
+    flowDetailsAttempted,
   ).length;
 
   const distinctOwners = new Set(
@@ -685,6 +726,184 @@ function App() {
     return Math.min(98, 73 + Math.round(ratio * 25));
   })();
 
+  const cancelDetailLoading = useCallback(() => {
+    detailWorkerGenerationRef.current += 1;
+    detailQueueRef.current = [];
+    queuedDetailKeysRef.current.clear();
+    setDetailQueueCount(0);
+    setIsLoadingAllDetails(false);
+  }, []);
+
+  const processDetailQueue = useCallback(async (generation: number) => {
+    if (detailWorkerRunningRef.current) {
+      return;
+    }
+
+    detailWorkerRunningRef.current = true;
+    setIsLoadingDetails(true);
+
+    try {
+      while (
+        detailQueueRef.current.length > 0 &&
+        generation === detailWorkerGenerationRef.current
+      ) {
+        const batchKeys = detailQueueRef.current.splice(
+          0,
+          DETAIL_QUEUE_BATCH_SIZE,
+        );
+        for (const key of batchKeys) {
+          queuedDetailKeysRef.current.delete(key);
+        }
+        setDetailQueueCount(detailQueueRef.current.length);
+
+        const flowsByKey = new Map(
+          flowsRef.current.map((flow) => [getFlowKey(flow), flow]),
+        );
+        const batchFlows = batchKeys.flatMap((key) => {
+          const flow = flowsByKey.get(key);
+          return flow && needsFlowDetails(flow, true) ? [flow] : [];
+        });
+        if (batchFlows.length === 0) {
+          continue;
+        }
+
+        const result = await enrichTenantFlowDetails(
+          batchFlows,
+          setDetailProgress,
+        );
+        if (generation !== detailWorkerGenerationRef.current) {
+          break;
+        }
+
+        const enrichedByKey = new Map(
+          result.flows.map((flow) => [getFlowKey(flow), flow]),
+        );
+        setFlows((current) => {
+          const next = current.map(
+            (flow) => enrichedByKey.get(getFlowKey(flow)) ?? flow,
+          );
+          flowsRef.current = next;
+          return next;
+        });
+        setIssues((current) => {
+          const updatedSources = new Set(
+            result.issues.map((issue) => issue.environmentName),
+          );
+          return [
+            ...current.filter(
+              (issue) =>
+                issue.environmentName !== "Flow detail loading" &&
+                !updatedSources.has(issue.environmentName),
+            ),
+            ...result.issues,
+          ];
+        });
+
+        const hasBlockingIssue = result.issues.some(
+          (issue) =>
+            issue.message.includes("isn't authorized") ||
+            issue.message.includes("isn't configured"),
+        );
+        if (hasBlockingIssue) {
+          detailQueueRef.current = [];
+          queuedDetailKeysRef.current.clear();
+          setDetailQueueCount(0);
+          setIsLoadingAllDetails(false);
+          break;
+        }
+
+        if (detailQueueRef.current.length > 0) {
+          await wait(DETAIL_QUEUE_INTERVAL_MS);
+        }
+      }
+    } catch (error) {
+      setIssues((current) => [
+        ...current.filter(
+          (issue) => issue.environmentName !== "Flow detail loading",
+        ),
+        {
+          severity: "error",
+          environmentName: "Flow detail loading",
+          message: errorMessage(error),
+        },
+      ]);
+      detailQueueRef.current = [];
+      queuedDetailKeysRef.current.clear();
+      setDetailQueueCount(0);
+    } finally {
+      detailWorkerRunningRef.current = false;
+      setIsLoadingDetails(false);
+      setIsLoadingAllDetails(false);
+      setDetailProgress(null);
+    }
+  }, []);
+
+  const enqueueFlowDetails = useCallback(
+    (
+      candidates: TenantFlow[],
+      includeFailed = false,
+      loadAll = false,
+    ) => {
+      let queuedAny = false;
+      for (const flow of candidates) {
+        if (!needsFlowDetails(flow, includeFailed)) {
+          continue;
+        }
+
+        const key = getFlowKey(flow);
+        if (queuedDetailKeysRef.current.has(key)) {
+          continue;
+        }
+
+        queuedDetailKeysRef.current.add(key);
+        detailQueueRef.current.push(key);
+        queuedAny = true;
+      }
+
+      if (!queuedAny) {
+        return;
+      }
+
+      setDetailQueueCount(detailQueueRef.current.length);
+      if (loadAll) {
+        setIsLoadingAllDetails(true);
+      }
+      if (!detailWorkerRunningRef.current) {
+        void processDetailQueue(detailWorkerGenerationRef.current);
+      }
+    },
+    [processDetailQueue],
+  );
+
+  useEffect(() => {
+    if (
+      scanStatus !== "complete" ||
+      isLoadingDetails ||
+      isLoadingAllDetails ||
+      !visibleFlowKeySignature
+    ) {
+      return;
+    }
+
+    const currentFlowsByKey = new Map(
+      flowsRef.current.map((flow) => [getFlowKey(flow), flow]),
+    );
+    const candidates = visibleFlowKeySignature
+      .split("|")
+      .flatMap((key) => {
+        const flow = currentFlowsByKey.get(key);
+        return flow && needsFlowDetails(flow) ? [flow] : [];
+      });
+    enqueueFlowDetails(candidates);
+  }, [
+    enqueueFlowDetails,
+    isLoadingAllDetails,
+    isLoadingDetails,
+    remainingDetailCount,
+    scanStatus,
+    visibleFlowKeySignature,
+  ]);
+
   async function startScan() {
     if (!scanScopeReady) {
       setScanError(
@@ -695,11 +914,9 @@ function App() {
 
     setScanStatus("scanning");
     setScanError(null);
-    setIsLoadingDetails(false);
-    setDetailProgress(null);
+    cancelDetailLoading();
     setIssues([]);
     clearAllFilters();
-    setPage(1);
     setSelectedFlowKeys(new Set());
     setIsCoOwnerAssignmentOpen(false);
     setCoOwnerAssignmentFlows([]);
@@ -721,59 +938,15 @@ function App() {
     }
   }
 
-  async function loadVisibleFlowDetails() {
-    const targetFlows = visibleFlows.filter(
-      (flow) =>
-        flow.coOwnerLookupStatus === "not-loaded" ||
-        flow.coOwnerLookupStatus === "failed" ||
-        flow.lastRunStatus === "not-loaded" ||
-        flow.lastRunStatus === "failed",
-    );
-    if (targetFlows.length === 0 || isLoadingDetails) {
-      return;
-    }
-
-    setIsLoadingDetails(true);
-    setDetailProgress({
-      phase: "enriching-flows",
-      processedItems: 0,
-      totalItems: targetFlows.length,
-      message: "Loading details for the current flow page.",
+  function resetInventoryView() {
+    cancelDetailLoading();
+    globalThis.requestAnimationFrame(() => {
+      rowVirtualizer.scrollToOffset(0);
     });
+  }
 
-    try {
-      const result = await enrichTenantFlowDetails(
-        targetFlows,
-        setDetailProgress,
-      );
-      const enrichedByKey = new Map(
-        result.flows.map((flow) => [getFlowKey(flow), flow]),
-      );
-      setFlows((current) =>
-        current.map(
-          (flow) => enrichedByKey.get(getFlowKey(flow)) ?? flow,
-        ),
-      );
-      setIssues((current) => [
-        ...current.filter(
-          (issue) =>
-            issue.environmentName !== "Power Automate for Admins" &&
-            issue.environmentName !== "GCC Flow admin API",
-        ),
-        ...result.issues,
-      ]);
-    } catch (error) {
-      setIssues((current) => [
-        ...current,
-        {
-          severity: "error",
-          environmentName: "Flow page details",
-          message: errorMessage(error),
-        },
-      ]);
-    } finally {
-      setIsLoadingDetails(false);
-    }
+  function loadAllFlowDetails() {
+    enqueueFlowDetails(filteredFlows, true, true);
   }
 
   function clearAllFilters() {
@@ -786,7 +959,7 @@ function App() {
     setDataverseFilter("all");
     setModifiedFilter("all");
     setDefaultEnvironmentOnly(false);
-    setPage(1);
+    resetInventoryView();
   }
 
   function applyMetricFilter(metric: MetricFilter) {
@@ -874,6 +1047,7 @@ function App() {
   }
 
   function updateSort(field: SortField) {
+    resetInventoryView();
     setSort((current) => ({
       field,
       direction:
@@ -989,9 +1163,9 @@ function App() {
               Power Platform environment before scanning. Dataverse status
               comes from the environment record, owner IDs are validated
               against Microsoft Entra ID, and additional co-owners plus the
-              latest available flow run date can be loaded for the current
-              result page. Co-owner access is granted only after an explicit
-              preview and confirmation.
+              latest available flow run date load automatically while
+              scrolling or through Load all details. Co-owner access is
+              granted only after an explicit preview and confirmation.
             </p>
           </div>
           <div className="hero-actions">
@@ -1285,7 +1459,7 @@ function App() {
                 value={searchText}
                 onChange={(event) => {
                   setSearchText(event.target.value);
-                  setPage(1);
+                  resetInventoryView();
                 }}
                 placeholder="Flow, owner, co-owner, or environment"
               />
@@ -1296,7 +1470,7 @@ function App() {
                 value={environmentFilter}
                 onChange={(event) => {
                   setEnvironmentFilter(event.target.value);
-                  setPage(1);
+                  resetInventoryView();
                 }}
               >
                 <option value="all">All environments</option>
@@ -1321,7 +1495,7 @@ function App() {
                 onChange={(event) => {
                   if (isOwnerFilter(event.target.value)) {
                     setOwnerFilter(event.target.value);
-                    setPage(1);
+                    resetInventoryView();
                   }
                 }}
               >
@@ -1341,7 +1515,7 @@ function App() {
                 value={ownerIdFilter}
                 onChange={(event) => {
                   setOwnerIdFilter(event.target.value);
-                  setPage(1);
+                  resetInventoryView();
                 }}
               >
                 <option value="all">All owners</option>
@@ -1362,7 +1536,7 @@ function App() {
                 value={environmentTypeFilter}
                 onChange={(event) => {
                   setEnvironmentTypeFilter(event.target.value);
-                  setPage(1);
+                  resetInventoryView();
                 }}
               >
                 <option value="all">All environment types</option>
@@ -1379,7 +1553,7 @@ function App() {
                 value={locationFilter}
                 onChange={(event) => {
                   setLocationFilter(event.target.value);
-                  setPage(1);
+                  resetInventoryView();
                 }}
               >
                 <option value="all">All regions</option>
@@ -1397,7 +1571,7 @@ function App() {
                 onChange={(event) => {
                   if (isDataverseFilter(event.target.value)) {
                     setDataverseFilter(event.target.value);
-                    setPage(1);
+                    resetInventoryView();
                   }
                 }}
               >
@@ -1419,7 +1593,7 @@ function App() {
                 onChange={(event) => {
                   if (isModifiedFilter(event.target.value)) {
                     setModifiedFilter(event.target.value);
-                    setPage(1);
+                    resetInventoryView();
                   }
                 }}
               >
@@ -1438,7 +1612,7 @@ function App() {
                 checked={defaultEnvironmentOnly}
                 onChange={(event) => {
                   setDefaultEnvironmentOnly(event.target.checked);
-                  setPage(1);
+                  resetInventoryView();
                 }}
               />
               <span>Default environment only</span>
@@ -1457,7 +1631,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setSearchText("");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Search: {searchText.trim()} <span>x</span>
@@ -1468,7 +1642,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setEnvironmentFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Environment:{" "}
@@ -1484,7 +1658,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setOwnerFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Owner status:{" "}
@@ -1501,7 +1675,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setOwnerIdFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Owner:{" "}
@@ -1517,7 +1691,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setEnvironmentTypeFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Type: {environmentTypeFilter} <span>x</span>
@@ -1528,7 +1702,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setLocationFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Region: {locationFilter} <span>x</span>
@@ -1539,7 +1713,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setDataverseFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     {DATAVERSE_FILTER_LABELS[dataverseFilter]} <span>x</span>
@@ -1550,7 +1724,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setModifiedFilter("all");
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     {MODIFIED_FILTER_LABELS[modifiedFilter]} <span>x</span>
@@ -1561,7 +1735,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setDefaultEnvironmentOnly(false);
-                      setPage(1);
+                      resetInventoryView();
                     }}
                   >
                     Default environment <span>x</span>
@@ -1578,28 +1752,58 @@ function App() {
             </div>
           ) : null}
 
-          {scanStatus === "complete" && visibleFlows.length > 0 ? (
+          {scanStatus === "complete" && filteredFlows.length > 0 ? (
             <div className="detail-load-bar">
               <div>
                 <strong>Extended flow details</strong>
                 <span>
-                  Load additional co-owners and supported run history for the
-                  {` ${visibleFlows.length.toLocaleString()} flow${visibleFlows.length === 1 ? "" : "s"}`}{" "}
-                  on this page.
+                  Co-owner and run details load automatically as flows enter
+                  the virtualized view.
+                </span>
+                <span>
+                  {attemptedDetailCount.toLocaleString()} of{" "}
+                  {filteredFlows.length.toLocaleString()} filtered flows
+                  processed
+                  {detailQueueCount > 0
+                    ? `; ${detailQueueCount.toLocaleString()} queued`
+                    : ""}
+                  .
                 </span>
               </div>
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={isLoadingDetails || pageDetailTargetCount === 0}
-                onClick={() => void loadVisibleFlowDetails()}
-              >
-                {isLoadingDetails
-                  ? `Loading ${detailProgress?.processedItems ?? 0}/${detailProgress?.totalItems ?? pageDetailTargetCount}`
-                  : pageDetailTargetCount > 0
-                    ? `Load page details (${pageDetailTargetCount})`
-                    : "Page details loaded"}
-              </button>
+              <div className="detail-load-actions">
+                {isLoadingAllDetails ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={cancelDetailLoading}
+                  >
+                    Cancel load all
+                  </button>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={
+                      remainingDetailCount + failedDetailCount === 0
+                    }
+                    onClick={loadAllFlowDetails}
+                  >
+                    {remainingDetailCount + failedDetailCount > 0
+                      ? `Load all details (${(remainingDetailCount + failedDetailCount).toLocaleString()})`
+                      : "All details loaded"}
+                  </button>
+                )}
+                {isLoadingDetails ? (
+                  <span className="detail-loading-status" aria-live="polite">
+                    {isLoadingAllDetails
+                      ? "Loading all details within connector limits"
+                      : "Loading visible details"}
+                    {detailProgress
+                      ? ` (${detailProgress.processedItems}/${detailProgress.totalItems})`
+                      : ""}
+                  </span>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -1662,8 +1866,8 @@ function App() {
             </div>
           ) : null}
 
-          <div className="table-wrap">
-            <table>
+          <div className="table-wrap" ref={tableContainerRef}>
+            <table className="virtual-table">
               <thead>
                 <tr>
                   <th className="selection-column">
@@ -1720,8 +1924,14 @@ function App() {
                   <th>Flow ID</th>
                 </tr>
               </thead>
-              <tbody>
-                {visibleFlows.map((flow) => (
+              <tbody
+                style={{
+                  height: `${rowVirtualizer.getTotalSize()}px`,
+                }}
+              >
+                {virtualRows.map((virtualRow) => {
+                  const flow = filteredFlows[virtualRow.index];
+                  return (
                   <tr
                     className={
                       selectedFlowKeys.has(getFlowKey(flow))
@@ -1729,6 +1939,11 @@ function App() {
                         : undefined
                     }
                     key={`${flow.environmentId}:${flow.id}`}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={{
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
                   >
                     <td className="selection-column">
                       <input
@@ -1849,7 +2064,7 @@ function App() {
                           flow.lastRunStatus === "unavailable"
                             ? "Run history is unavailable because required flow identifiers or Flow API authorization aren't available."
                             : flow.lastRunStatus === "not-loaded"
-                              ? "Select Load page details to retrieve supported run history for this row."
+                              ? "Run history loads automatically when this row enters view, or when Load all details is selected."
                             : undefined
                         }
                       >
@@ -1860,11 +2075,12 @@ function App() {
                       <code>{flow.id}</code>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
 
-            {visibleFlows.length === 0 ? (
+            {filteredFlows.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-mark" aria-hidden="true">
                   OF
@@ -1892,38 +2108,16 @@ function App() {
           </div>
 
           {filteredFlows.length > 0 ? (
-            <div className="pagination">
+            <div className="scroll-summary">
               <span>
-                Showing {firstVisibleFlow.toLocaleString()}-
-                {lastVisibleFlow.toLocaleString()} of{" "}
-                {filteredFlows.length.toLocaleString()}
+                {filteredFlows.length.toLocaleString()} flow
+                {filteredFlows.length === 1 ? "" : "s"} in one continuous,
+                virtualized scroll
               </span>
-              <div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPage((current) => Math.max(1, current - 1))
-                  }
-                  disabled={currentPage === 1}
-                >
-                  Previous
-                </button>
-                <span>
-                  Page {currentPage.toLocaleString()} of{" "}
-                  {totalPages.toLocaleString()}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPage((current) =>
-                      Math.min(totalPages, current + 1),
-                    )
-                  }
-                  disabled={currentPage === totalPages}
-                >
-                  Next
-                </button>
-              </div>
+              <span>
+                {attemptedDetailCount.toLocaleString()} detail record
+                {attemptedDetailCount === 1 ? "" : "s"} processed
+              </span>
             </div>
           ) : null}
         </section>

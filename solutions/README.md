@@ -4,7 +4,7 @@
 
 Use:
 
-`OrphanedFlowFinder_1_1_2_0_managed.zip`
+`OrphanedFlowFinder_1_1_3_0_managed.zip`
 
 This is the recommended package for production, UAT, and normal tenant
 installations. Import it through **Power Apps > Solutions > Import solution**.
@@ -13,7 +13,7 @@ installations. Import it through **Power Apps > Solutions > Import solution**.
 
 Use:
 
-`OrphanedFlowFinder_1_1_2_0_unmanaged.zip`
+`OrphanedFlowFinder_1_1_3_0_unmanaged.zip`
 
 Only use the unmanaged package when the target organization intentionally
 takes ownership of customizations and future development.
@@ -30,13 +30,13 @@ Each package contains:
 - Power Automate for Admins connection reference
 - Power Automate Management connection reference
 
-The current packages use solution version **1.1.2.0** and include a fast base
-scan, page-scoped co-owner names and last-run dates, authoritative
-Dataverse/No Dataverse badges, co-owner assignment, and guided Send a copy
-workflow.
+The current packages use solution version **1.1.3.0** and include a fast base
+scan, continuous virtualized scrolling, automatic visible-row details, an
+optional throttled Load all details queue, authoritative Dataverse/No
+Dataverse badges, co-owner assignment, and guided Send a copy workflow.
 
 Earlier ZIPs are retained for historical comparison. New installations and
-updates should use `1.1.2.0`.
+updates should use `1.1.3.0`.
 
 Connections aren't transported between tenants. Create the six target
 connections and map the imported connection references as described in

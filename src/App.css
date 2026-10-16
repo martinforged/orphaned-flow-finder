@@ -661,6 +661,19 @@ button.metric-card[aria-pressed="true"] {
   white-space: nowrap;
 }
 
+.detail-load-actions {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px !important;
+}
+
+.detail-loading-status {
+  color: #087b72 !important;
+  font-weight: 750;
+}
+
 .filter-bar input,
 .filter-bar select {
   width: 100%;
@@ -716,8 +729,10 @@ button.metric-card[aria-pressed="true"] {
 
 .table-wrap {
   position: relative;
+  height: min(70vh, 760px);
   min-height: 350px;
-  overflow-x: auto;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 table {
@@ -725,6 +740,40 @@ table {
   min-width: 1350px;
   border-collapse: collapse;
   table-layout: fixed;
+}
+
+.virtual-table {
+  display: grid;
+}
+
+.virtual-table thead {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: grid;
+  box-shadow: 0 1px 0 #edf0f4;
+}
+
+.virtual-table tbody {
+  position: relative;
+  display: grid;
+}
+
+.virtual-table tr {
+  width: 100%;
+  display: flex;
+}
+
+.virtual-table tbody tr {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.virtual-table th,
+.virtual-table td {
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
 th,
@@ -1055,7 +1104,7 @@ td code {
   line-height: 1.6;
 }
 
-.pagination {
+.scroll-summary {
   min-height: 62px;
   box-sizing: border-box;
   display: flex;
@@ -1066,23 +1115,6 @@ td code {
   color: #737f92;
   background: #fafbfd;
   font-size: 11px;
-}
-
-.pagination > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.pagination button {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid #cfd7e3;
-  border-radius: 8px;
-  color: #34445f;
-  background: #ffffff;
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .issues-panel {
@@ -1741,6 +1773,11 @@ footer span:first-child {
     width: 100%;
   }
 
+  .detail-load-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .selection-bar {
     align-items: flex-start;
     flex-direction: column;
@@ -1775,7 +1812,7 @@ footer span:first-child {
     padding: 22px 20px 16px;
   }
 
-  .pagination {
+  .scroll-summary {
     align-items: flex-start;
     flex-direction: column;
     padding: 14px 20px;

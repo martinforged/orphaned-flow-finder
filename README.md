@@ -12,19 +12,19 @@ operations guidance, see [DEPLOYMENT-GUIDE.md](./DEPLOYMENT-GUIDE.md).
 Ready-to-import Power Platform solution packages are available in
 [solutions/](./solutions/):
 
-- [Managed solution](./solutions/OrphanedFlowFinder_1_1_2_0_managed.zip) -
+- [Managed solution](./solutions/OrphanedFlowFinder_1_1_3_0_managed.zip) -
   recommended for production, UAT, and most tenant installations.
-- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_2_0_unmanaged.zip) -
+- [Unmanaged solution](./solutions/OrphanedFlowFinder_1_1_3_0_unmanaged.zip) -
   intended only for organizations taking ownership of future development.
 
 The packages contain the Code App and six solution connection references.
 Target-tenant connections must be created and mapped during or after import.
 See the deployment guide before installing.
 
-## Current release: v1.1.2
+## Current release: v1.1.3
 
-Version 1.1.2 fixes the v1.1.1 GCC lookup paths and separates the fast base
-inventory from page-scoped extended details:
+Version 1.1.3 replaces numbered pagination with a virtualized continuous
+inventory and adds automatic, throttled extended-detail loading:
 
 - Merges the Power Platform for Admins environment list with
   `microsoft.powerplatform/environments` inventory records so Dataverse-backed
@@ -40,14 +40,18 @@ inventory from page-scoped extended details:
 - Displays environment, Dataverse database status, solution-aware status, flow
   ID, owner identity/status, creator object ID, creation time, and last
   modified time during the base scan.
-- Loads additional co-owner names and the latest flow run for at most the 50
-  flows on the current page when the administrator selects **Load page
-  details**.
+- Presents every filtered flow through one continuous scrollbar while mounting
+  only the visible rows for browser performance.
+- Loads additional co-owner names and the latest flow run automatically as
+  rows enter view.
+- Provides **Load all details** for complete enrichment of the filtered
+  inventory, with processed/queued counts and cancellation.
 - Filters by free-text search, environment, owner status, specific owner,
   environment type, region, Dataverse database status, modified-date window,
   and Default environment.
 - Makes every summary metric clickable: environment and cloud-flow cards reset/organize the inventory, while owner, orphaned, and disabled cards apply their matching quick filters.
-- Shows active filter chips, per-environment flow counts, one-click filter reset, sorting, pagination, and CSV export.
+- Shows active filter chips, per-environment flow counts, one-click filter
+  reset, sorting, continuous virtualized scrolling, and CSV export.
 - Reports malformed records and paging inconsistencies instead of silently omitting failures.
 - Allows an administrator to select scanned flows and assign an active Microsoft
   Entra user as a co-owner, regardless of whether the environment has
@@ -81,7 +85,7 @@ app uses six connection references across five standard connectors:
 4. **Office 365 Users** - validates primary owners, resolves co-owner names,
    and searches active co-owner candidates.
 5. **Power Automate for Admins** - reads owner and co-owner permissions for
-   flows on the current page.
+   flows queued for extended details.
 6. **Power Automate Management** - uses **Modify Flow Owners as Admin** only
    after preview and confirmation.
 
@@ -138,9 +142,11 @@ npx pa app push --solution-id <TARGET-SOLUTION-ID>
 - Cloud flows are queried from the `PowerPlatformResources` inventory table by resource type, avoiding hundreds of per-environment management calls.
 - The base inventory doesn't make per-flow permission or run-history calls.
   This keeps tenant-wide scans fast even when they contain thousands of flows.
-- **Load page details** enriches at most the 50 flows on the current page in
-  batches of five. Authorization failures stop further calls of that type for
-  the page instead of repeating a known failure.
+- Visible flows are enriched automatically in batches of five. **Load all
+  details** queues every remaining filtered flow, waits 3.5 seconds between
+  batches to stay within connector limits, and supports cancellation.
+- Virtualization keeps the mounted DOM row count small even when the inventory
+  contains thousands of flows.
 - The additional co-owner list includes `Owner` and `CanEdit` permissions other
   than the primary owner reported by inventory. User GUIDs are batch-resolved
   through Office 365 Users so the table shows names and UPNs; groups remain

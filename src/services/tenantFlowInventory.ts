@@ -1007,7 +1007,7 @@ export async function enrichTenantFlowDetails(
     issues.push({
       severity: "warning",
       environmentName: "Power Automate for Admins",
-      message: `${enrichment.coOwnerFailureCount.toLocaleString()} flow co-owner lookup(s) failed on this page. Affected rows show Lookup failed instead of an incomplete owner list. ${enrichment.firstCoOwnerError ?? ""}`.trim(),
+      message: `${enrichment.coOwnerFailureCount.toLocaleString()} flow co-owner lookup(s) failed in this detail batch. Affected rows show Lookup failed instead of an incomplete owner list. ${enrichment.firstCoOwnerError ?? ""}`.trim(),
     });
   }
   if (enrichment.coOwnerAuthorizationFailureCount > 0) {
@@ -1028,7 +1028,7 @@ export async function enrichTenantFlowDetails(
     issues.push({
       severity: "warning",
       environmentName: "GCC Flow admin API",
-      message: `${enrichment.lastRunFailureCount.toLocaleString()} last-run lookup(s) failed on this page. Affected rows show Lookup failed instead of an inaccurate date. ${enrichment.firstLastRunError ?? ""}`.trim(),
+      message: `${enrichment.lastRunFailureCount.toLocaleString()} last-run lookup(s) failed in this detail batch. Affected rows show Lookup failed instead of an inaccurate date. ${enrichment.firstLastRunError ?? ""}`.trim(),
     });
   }
   if (enrichment.lastRunAuthorizationFailureCount > 0) {

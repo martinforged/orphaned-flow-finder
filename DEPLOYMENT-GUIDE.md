@@ -25,7 +25,7 @@ repository. Sections 3 and 4 are for maintainers who build a new release and
 can be skipped by a target-tenant installer.
 
 1. Download
-   `solutions/OrphanedFlowFinder_1_1_2_0_managed.zip`.
+   `solutions/OrphanedFlowFinder_1_1_3_0_managed.zip`.
 2. Confirm the file hash against `solutions/SHA256SUMS.txt`.
 3. Complete the target prerequisites in section 5.
 4. Create the six target connections in section 6.
@@ -75,7 +75,7 @@ The app requires six connection references across five connectors.
 | HTTP with Microsoft Entra ID (preauthorized) - Inventory API | `shared_webcontents` | Queries GCC environment and cloud flow inventory | Shareable connection |
 | HTTP with Microsoft Entra ID (preauthorized) - Flow Admin API | `shared_webcontents` | Reads the latest run through the GCC Flow admin API | Shareable connection |
 | Office 365 Users | `shared_office365users` | Validates owner IDs, resolves co-owner names, and searches recovery users | Per-user/nonshareable |
-| Power Automate for Admins | `shared_microsoftflowforadmins` | Reads flow owner permissions for the current page | Per-user/nonshareable |
+| Power Automate for Admins | `shared_microsoftflowforadmins` | Reads flow owner permissions for visible or queued flows | Per-user/nonshareable |
 | Power Automate Management | `shared_flowmanagement` | Adds a confirmed flow co-owner as admin | Per-user/nonshareable |
 
 ### GCC HTTP connection endpoints
@@ -282,8 +282,8 @@ Distribute:
 
 The repository's official release artifacts are:
 
-- `solutions/OrphanedFlowFinder_1_1_2_0_managed.zip`
-- `solutions/OrphanedFlowFinder_1_1_2_0_unmanaged.zip`
+- `solutions/OrphanedFlowFinder_1_1_3_0_managed.zip`
+- `solutions/OrphanedFlowFinder_1_1_3_0_unmanaged.zip`
 - `solutions/SHA256SUMS.txt`
 
 ## 5. Target tenant prerequisites
@@ -381,7 +381,7 @@ only for page-scoped, read-only last-run lookups.
 2. Select the target environment.
 3. Open **Solutions**.
 4. Select **Import solution**.
-5. Upload `OrphanedFlowFinder_1_1_2_0_managed.zip` for the standard
+5. Upload `OrphanedFlowFinder_1_1_3_0_managed.zip` for the standard
    installation, or the unmanaged ZIP only when the target team will own
    future development.
 6. Review the package details and dependencies.
@@ -440,8 +440,12 @@ Complete this checklist before production use.
 - Owner IDs are deduplicated and validated.
 - Active, Disabled, Deleted, Missing, and Unknown statuses behave as expected.
 - The base scan completes without waiting for per-flow detail calls.
-- **Load page details** resolves user co-owner names and returns the latest run
-  or **No runs found** for the current page.
+- The inventory uses one continuous scrollbar and doesn't show numbered
+  pagination.
+- Details load automatically as rows enter view.
+- **Load all details** queues every remaining filtered flow, reports progress,
+  and can be cancelled.
+- Co-owner names resolve and last-run returns a timestamp or **No runs found**.
 
 ### Filters and export
 
@@ -543,9 +547,9 @@ Administrator permissions. The operator must already hold the required role.
 | Flow Admin HTTP connector returns authorization errors | The Flow API base URL or resource URI is wrong | Use base `https://gov.api.flow.microsoft.us` and resource `https://gov.service.flow.microsoft.us/`, then repair consent |
 | `AADSTS7000301` from Power Platform for Admins V2 | The unsupported V2 connector was added to an older build | Upgrade to v1.1.2 or later; the app must use the Flow-scoped preauthorized HTTP connection instead |
 | Directory owners show Unknown | Office 365 Users lookup failed or was throttled | Repair the Office 365 Users connection and scan again |
-| Additional co-owners show Lookup failed | Power Automate for Admins couldn't read flow permissions | Repair that connection, verify admin access, and retry **Load page details** |
+| Additional co-owners show Lookup failed | Power Automate for Admins couldn't read flow permissions | Repair that connection, verify admin access, and scroll the row into view or select **Load all details** |
 | Additional co-owners show GUIDs | Office 365 Users couldn't resolve those user IDs, or the principal is a group | Review scan notes; users resolve to names/UPNs while groups remain labeled as groups |
-| Last flow run shows Not loaded | Page details haven't been requested | Select **Load page details** above the result table |
+| Last flow run shows Not loaded | The row hasn't entered the virtualized view and Load all isn't running | Scroll the row into view or select **Load all details** |
 | Last flow run shows Lookup failed | The Flow admin request failed or returned an unreadable response | Review scan notes and repair the Flow Admin API HTTP connection |
 | Inventory is empty or stale | Role doesn't include tenant inventory access, wrong API endpoint, or inventory propagation delay | Verify role/endpoint and wait at least 15 minutes |
 | Dataverse environment is missing | One environment-discovery source failed or inventory hasn't propagated | Review **Scan notes and exceptions**, verify both admin connections, wait 15 minutes, and scan again; flow-referenced environments are added with an ID-based fallback |
